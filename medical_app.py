@@ -2,12 +2,14 @@ import streamlit as st
 from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import smtplib
+from email.message import EmailMessage
 
 # -----------------------------
 # PAGE SETUP
 # -----------------------------
 st.set_page_config(page_title="Smart Health Monitoring Kiosk", layout="centered")
-st.title("NEW VERSION - Smart Health Monitoring Kiosk")
+st.title("Smart Health Monitoring Kiosk")
 
 # -----------------------------
 # GOOGLE SHEETS CONNECTION
@@ -19,7 +21,8 @@ def connect_to_google_sheet():
             "https://www.googleapis.com/auth/drive"
         ]
 
-        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
 
         spreadsheet = client.open("Student Health Monitoring System")
@@ -33,10 +36,64 @@ def connect_to_google_sheet():
 sheet, connection_error = connect_to_google_sheet()
 
 # -----------------------------
+# EMAIL FUNCTION
+# -----------------------------
+def send_doctor_email(student_id, name, temperature, heart_rate, bp, spo2, bmi, risk_score, severity):
+    try:
+        sender_email = st.secrets["email"]["sender_email"]
+        app_password = st.secrets["email"]["app_password"]
+        doctor_email = st.secrets["email"]["doctor_email"]
+
+        subject = f"URGENT: Health Alert for {name} ({student_id})"
+
+        body = f"""
+Student Health Alert
+
+Student ID: {student_id}
+Student Name: {name}
+Temperature: {temperature} °C
+Heart Rate: {heart_rate} bpm
+Blood Pressure: {bp}
+SpO2: {spo2} %
+BMI: {bmi:.2f}
+Risk Score: {risk_score}
+Severity: {severity}
+Timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+Immediate medical attention may be required.
+"""
+
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = sender_email
+        msg["To"] = doctor_email
+        msg.set_content(body)
+
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
+                smtp.login(sender_email, app_password)
+                smtp.send_message(msg)
+            return True, "Doctor email sent successfully."
+
+        except Exception as e1:
+            try:
+                with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as smtp:
+                    smtp.ehlo()
+                    smtp.starttls()
+                    smtp.ehlo()
+                    smtp.login(sender_email, app_password)
+                    smtp.send_message(msg)
+                return True, "Doctor email sent successfully using TLS fallback."
+            except Exception as e2:
+                return False, f"SSL failed: {e1} | TLS failed: {e2}"
+
+    except Exception as e:
+        return False, f"Email configuration error: {e}"
+
+# -----------------------------
 # CONNECTION STATUS
 # -----------------------------
 st.subheader("Connection Status")
-
 if connection_error:
     st.error(f"Google Sheets connection failed: {connection_error}")
 else:
@@ -77,7 +134,7 @@ elif temperature < 35:
     risk_score += 3
     warnings.append("Possible hypothermia")
 
-# Heart rate
+# Heart Rate
 if heart_rate > 130 or heart_rate < 50:
     risk_score += 3
     warnings.append("Critical heart rate")
@@ -85,7 +142,7 @@ elif heart_rate > 100:
     risk_score += 2
     warnings.append("High heart rate")
 
-# Blood pressure
+# Blood Pressure
 if bp.strip():
     try:
         sys_bp, dia_bp = bp.split("/")
@@ -140,26 +197,16 @@ st.write(f"**Severity Level:** {severity}")
 st.write(f"**Alert Status:** {alert_status}")
 
 if warnings:
-    st.write("⚠️ Issues Detected:")
+    st.write("Issues Detected:")
     for item in warnings:
         st.write(f"- {item}")
 
 if severity == "CRITICAL":
-    st.error("🚨 Immediate medical attention required!")
+    st.error("Immediate medical attention required!")
 elif severity == "WARNING":
-    st.warning("⚠️ Monitor patient closely")
+    st.warning("Monitor patient closely.")
 else:
-    st.success("✅ Patient is stable")
-
-# -----------------------------
-# DEBUG SECTION
-# -----------------------------
-st.subheader("Debug Information")
-
-st.write("Student ID:", student_id)
-st.write("Name:", name)
-st.write("Will save to sheet:", "Yes" if sheet else "No")
-st.write("Google connection error:", connection_error if connection_error else "None")
+    st.success("Patient is stable.")
 
 # -----------------------------
 # SAVE TO GOOGLE SHEETS
@@ -173,6 +220,16 @@ if st.button("Process Record"):
         st.error("Student Name is required.")
     else:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        email_status = "Not needed"
+
+        if severity == "CRITICAL":
+            email_sent, email_message = send_doctor_email(
+                student_id, name, temperature, heart_rate, bp, spo2, bmi, risk_score, severity
+            )
+            if email_sent:
+                email_status = "Sent"
+            else:
+                email_status = f"Failed: {email_message}"
 
         row_data = [
             student_id,
@@ -188,17 +245,21 @@ if st.button("Process Record"):
             timestamp
         ]
 
-        st.write("Data about to be saved:")
-        st.write(row_data)
-
         try:
             sheet.append_row(row_data)
-            st.success("Record saved to Google Sheets successfully.")
+            if severity == "CRITICAL":
+                if email_status == "Sent":
+                    st.success("Record saved to Google Sheets and doctor notified.")
+                else:
+                    st.warning("Record saved, but email was not sent.")
+                    st.info(email_status)
+            else:
+                st.success("Record saved to Google Sheets successfully.")
         except Exception as e:
             st.error(f"Google Sheets save failed: {e}")
 
 # -----------------------------
-# VIEW SAVED RECORDS
+# LIVE RECORDS PREVIEW
 # -----------------------------
 st.subheader("Live Records Preview")
 
@@ -206,7 +267,7 @@ if sheet:
     try:
         records = sheet.get_all_values()
         if records:
-            st.dataframe(records)
+            st.dataframe(records, use_container_width=True)
         else:
             st.info("Sheet is empty.")
     except Exception as e:

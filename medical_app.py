@@ -16,7 +16,7 @@ st.title("Smart Health Monitoring Kiosk")
 # -----------------------------
 # API CONNECTION
 # -----------------------------
-API_BASE_URL = "https://YOUR-API-NAME.onrender.com"
+API_BASE_URL = "https://healthmonitoring-api.onrender.com"
 
 
 def get_latest_api_reading():

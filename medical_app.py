@@ -35,12 +35,13 @@ def get_latest_api_reading():
         )
 
         if response.status_code == 200:
+
             data = response.json()
 
             if data.get("status") == "success":
                 return data.get("data"), None
 
-        return None, "No ESP32 reading available."
+        return None, "No live ESP32 reading."
 
     except Exception as e:
         return None, str(e)
@@ -50,13 +51,16 @@ def get_latest_api_reading():
 # GOOGLE SHEETS CONNECTION
 # =====================================================
 def connect_to_google_sheet():
+
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive"
         ]
 
-        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds_dict = dict(
+            st.secrets["gcp_service_account"]
+        )
 
         creds = ServiceAccountCredentials.from_json_keyfile_dict(
             creds_dict,
@@ -69,7 +73,9 @@ def connect_to_google_sheet():
             "Student Health Monitoring System"
         )
 
-        worksheet = spreadsheet.worksheet("Live_Records")
+        worksheet = spreadsheet.worksheet(
+            "Live_Records"
+        )
 
         return worksheet, None
 
@@ -96,14 +102,17 @@ def send_doctor_email(
 ):
 
     try:
+
         sender_email = st.secrets["email"]["sender_email"]
+
         app_password = st.secrets["email"]["app_password"]
+
         doctor_email = st.secrets["email"]["doctor_email"]
 
         subject = f"URGENT HEALTH ALERT - {name}"
 
         body = f"""
-SMART HEALTH MONITORING ALERT
+SMART HEALTH ALERT
 
 Student ID: {student_id}
 Student Name: {name}
@@ -119,14 +128,14 @@ Severity: {severity}
 
 Timestamp:
 {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-Immediate medical attention may be required.
 """
 
         msg = EmailMessage()
+
         msg["Subject"] = subject
         msg["From"] = sender_email
         msg["To"] = doctor_email
+
         msg.set_content(body)
 
         with smtplib.SMTP_SSL(
@@ -134,7 +143,11 @@ Immediate medical attention may be required.
             465
         ) as smtp:
 
-            smtp.login(sender_email, app_password)
+            smtp.login(
+                sender_email,
+                app_password
+            )
+
             smtp.send_message(msg)
 
         return True
@@ -145,26 +158,115 @@ Immediate medical attention may be required.
 
 
 # =====================================================
-# CONNECTION STATUS
+# RISK CALCULATION
+# =====================================================
+def calculate_risk(
+        temperature,
+        heart_rate,
+        spo2,
+        bmi,
+        bp
+):
+
+    risk_score = 0
+    warnings = []
+
+    # Temperature
+    if temperature > 39:
+        risk_score += 3
+        warnings.append("High Fever")
+
+    elif temperature > 38:
+        risk_score += 2
+        warnings.append("Fever")
+
+    # Heart Rate
+    if heart_rate > 120:
+        risk_score += 3
+        warnings.append("Very High Heart Rate")
+
+    elif heart_rate > 100:
+        risk_score += 2
+        warnings.append("High Heart Rate")
+
+    # SpO2
+    if spo2 < 92:
+        risk_score += 3
+        warnings.append("Low Oxygen Saturation")
+
+    elif spo2 < 95:
+        risk_score += 2
+        warnings.append("Borderline Oxygen Saturation")
+
+    # BMI
+    if bmi > 30:
+        risk_score += 1
+        warnings.append("High BMI")
+
+    elif bmi < 18.5:
+        risk_score += 1
+        warnings.append("Low BMI")
+
+    # Blood Pressure
+    try:
+
+        sys_bp, dia_bp = bp.split("/")
+
+        sys_bp = int(sys_bp)
+        dia_bp = int(dia_bp)
+
+        if sys_bp > 180 or dia_bp > 120:
+            risk_score += 3
+            warnings.append("Critical Blood Pressure")
+
+        elif sys_bp >= 140 or dia_bp >= 90:
+            risk_score += 1
+            warnings.append("High Blood Pressure")
+
+    except:
+        pass
+
+    # Severity
+    if risk_score >= 6:
+        severity = "CRITICAL"
+        alert = "ALERT"
+
+    elif risk_score >= 3:
+        severity = "WARNING"
+        alert = "WATCH"
+
+    else:
+        severity = "NORMAL"
+        alert = "OK"
+
+    return risk_score, severity, alert, warnings
+
+
+# =====================================================
+# SYSTEM STATUS
 # =====================================================
 st.subheader("🟢 System Status")
 
-c1, c2, c3 = st.columns(3)
+s1, s2, s3 = st.columns(3)
 
-with c1:
-    st.success("✅ Streamlit Dashboard Online")
+with s1:
+    st.success("✅ Streamlit Online")
 
-with c2:
+with s2:
+
     if sheet_error:
         st.error("❌ Google Sheets Offline")
+
     else:
         st.success("✅ Google Sheets Connected")
 
 latest_data, api_error = get_latest_api_reading()
 
-with c3:
+with s3:
+
     if api_error:
-        st.warning("⚠️ Waiting for ESP32...")
+        st.warning("⚠️ Waiting For ESP32")
+
     else:
         st.success("✅ ESP32 API Connected")
 
@@ -174,30 +276,25 @@ st.divider()
 # =====================================================
 # LIVE ESP32 DATA
 # =====================================================
-st.header("📡 Live Student Health Data")
+st.header("📡 Live ESP32 Health Data")
 
 if latest_data:
 
-    # -----------------------------------
-    # STUDENT INFORMATION
-    # -----------------------------------
-    st.subheader("👤 Student Information")
+    i1, i2, i3 = st.columns(3)
 
-    s1, s2, s3 = st.columns(3)
-
-    with s1:
+    with i1:
         st.info(
             f"Student ID: "
             f"{latest_data.get('student_id', 'N/A')}"
         )
 
-    with s2:
+    with i2:
         st.info(
             f"Name: "
             f"{latest_data.get('name', 'N/A')}"
         )
 
-    with s3:
+    with i3:
         st.info(
             f"Timestamp: "
             f"{latest_data.get('timestamp', 'N/A')}"
@@ -205,11 +302,7 @@ if latest_data:
 
     st.divider()
 
-    # -----------------------------------
-    # LIVE VITALS
-    # -----------------------------------
-    st.subheader("🩺 Vital Signs")
-
+    # VITALS
     v1, v2, v3, v4, v5 = st.columns(5)
 
     with v1:
@@ -244,113 +337,58 @@ if latest_data:
 
     st.divider()
 
-    # -----------------------------------
-    # HEALTH ASSESSMENT
-    # -----------------------------------
-    st.subheader("🧠 AI Health Assessment")
+    # AI ASSESSMENT
+    st.subheader("🧠 Health Assessment")
+
+    risk_score = latest_data.get("risk_score", 0)
+    severity = latest_data.get("severity", "NORMAL")
+    alert = latest_data.get("alert", "OK")
 
     a1, a2, a3 = st.columns(3)
 
     with a1:
-        st.metric(
-            "Risk Score",
-            latest_data.get('risk_score', '--')
-        )
+        st.metric("Risk Score", risk_score)
 
     with a2:
-        st.metric(
-            "Severity",
-            latest_data.get('severity', '--')
-        )
+        st.metric("Severity", severity)
 
     with a3:
-        st.metric(
-            "Alert",
-            latest_data.get('alert', '--')
-        )
+        st.metric("Alert", alert)
 
-    # -----------------------------------
-    # CRITICAL ALERT DISPLAY
-    # -----------------------------------
-    severity = latest_data.get("severity", "")
-
+    # ALERT DISPLAY
     if severity == "CRITICAL":
+
         st.error(
             "🚨 CRITICAL HEALTH CONDITION DETECTED"
         )
 
     elif severity == "WARNING":
+
         st.warning(
             "⚠️ Student Requires Monitoring"
         )
 
     else:
+
         st.success(
             "✅ Student Condition Stable"
         )
 
-    st.divider()
-
-    # =====================================================
-    # AUTO SAVE LIVE RECORD
-    # =====================================================
-    if sheet:
-
-        timestamp = latest_data.get(
-            "timestamp",
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        )
-
-        row_data = [
-            latest_data.get("student_id", ""),
-            latest_data.get("name", ""),
-            latest_data.get("temperature", ""),
-            latest_data.get("heart_rate", ""),
-            latest_data.get("bp", ""),
-            latest_data.get("spo2", ""),
-            latest_data.get("bmi", ""),
-            latest_data.get("risk_score", ""),
-            latest_data.get("severity", ""),
-            latest_data.get("alert", ""),
-            timestamp
-        ]
-
-        try:
-            existing = sheet.get_all_values()
-
-            if len(existing) == 0 or row_data not in existing:
-                sheet.append_row(row_data)
-
-                if severity == "CRITICAL":
-
-                    send_doctor_email(
-                        latest_data.get("student_id", ""),
-                        latest_data.get("name", ""),
-                        latest_data.get("temperature", ""),
-                        latest_data.get("heart_rate", ""),
-                        latest_data.get("bp", ""),
-                        latest_data.get("spo2", ""),
-                        latest_data.get("bmi", ""),
-                        latest_data.get("risk_score", ""),
-                        severity
-                    )
-
-        except Exception as e:
-            st.error(f"Google Sheets Error: {e}")
-
 else:
-    st.info("Waiting for ESP32 sensor readings...")
+    st.info(
+        "No live ESP32 data available."
+    )
 
 
 st.divider()
 
 # =====================================================
-# LIVE AUTO REFRESH
+# AUTO REFRESH
 # =====================================================
 st.subheader("🔄 Live Monitoring")
 
 auto_refresh = st.toggle(
-    "Enable auto refresh every 5 seconds",
+    "Enable Auto Refresh",
     value=True
 )
 
@@ -362,73 +400,121 @@ if auto_refresh:
 st.divider()
 
 # =====================================================
-# MANUAL MAINTENANCE MODE
+# EMERGENCY MANUAL OVERRIDE
 # =====================================================
-st.header("🛠 Maintenance / Manual Entry")
+st.header("🛠 Emergency Manual Override")
 
-maintenance_mode = st.checkbox(
-    "Enable Maintenance Mode"
+manual_override = st.toggle(
+    "Enable Manual Vital Entry"
 )
 
-if maintenance_mode:
+if manual_override:
 
     st.warning(
-        "Maintenance mode enabled."
+        "Manual override active."
     )
 
-    with st.form("manual_entry"):
+    with st.form("manual_vitals_form"):
 
         col1, col2 = st.columns(2)
 
         with col1:
-            student_id = st.text_input("Student ID")
-            name = st.text_input("Student Name")
+
+            student_id = st.text_input(
+                "Student ID"
+            )
+
+            name = st.text_input(
+                "Student Name"
+            )
 
             temperature = st.number_input(
-                "Temperature"
+                "Temperature (°C)",
+                value=36.5
             )
 
             heart_rate = st.number_input(
-                "Heart Rate"
+                "Heart Rate",
+                value=75
             )
 
         with col2:
+
             spo2 = st.number_input(
-                "SpO₂"
+                "SpO₂ (%)",
+                value=98
             )
 
             bp = st.text_input(
-                "Blood Pressure"
+                "Blood Pressure",
+                value="120/80"
             )
 
             bmi = st.number_input(
-                "BMI"
+                "BMI",
+                value=22.0
             )
 
-            severity = st.selectbox(
-                "Severity",
-                ["NORMAL", "WARNING", "CRITICAL"]
-            )
-
-        submit = st.form_submit_button(
-            "Save Manual Record"
+        submit_manual = st.form_submit_button(
+            "Process Manual Record"
         )
 
-        if submit:
+        if submit_manual:
 
+            risk_score, severity, alert, warnings = calculate_risk(
+                temperature,
+                heart_rate,
+                spo2,
+                bmi,
+                bp
+            )
+
+            # DISPLAY RESULT
+            st.subheader(
+                "🧠 Manual Health Assessment"
+            )
+
+            m1, m2, m3 = st.columns(3)
+
+            with m1:
+                st.metric(
+                    "Risk Score",
+                    risk_score
+                )
+
+            with m2:
+                st.metric(
+                    "Severity",
+                    severity
+                )
+
+            with m3:
+                st.metric(
+                    "Alert",
+                    alert
+                )
+
+            # WARNINGS
+            if warnings:
+
+                st.warning(
+                    "⚠️ Issues Detected"
+                )
+
+                for item in warnings:
+                    st.write(f"- {item}")
+
+            else:
+                st.success(
+                    "✅ No major abnormalities detected."
+                )
+
+            # SAVE TO SHEETS
             if sheet:
 
                 timestamp = datetime.now().strftime(
                     "%Y-%m-%d %H:%M:%S"
                 )
-
-                risk_score = 0
-
-                if severity == "WARNING":
-                    risk_score = 4
-
-                elif severity == "CRITICAL":
-                    risk_score = 7
 
                 row_data = [
                     student_id,
@@ -440,17 +526,19 @@ if maintenance_mode:
                     bmi,
                     risk_score,
                     severity,
-                    "MANUAL",
+                    alert,
                     timestamp
                 ]
 
                 try:
+
                     sheet.append_row(row_data)
 
                     st.success(
-                        "Manual record saved."
+                        "Record saved to Google Sheets."
                     )
 
+                    # EMAIL ALERT
                     if severity == "CRITICAL":
 
                         send_doctor_email(
@@ -465,24 +553,27 @@ if maintenance_mode:
                             severity
                         )
 
-                        st.warning(
-                            "Doctor alert sent."
+                        st.error(
+                            "🚨 Doctor Alert Sent"
                         )
 
                 except Exception as e:
-                    st.error(f"Save Error: {e}")
+                    st.error(
+                        f"Save Error: {e}"
+                    )
 
 
-# =====================================================
-# GOOGLE SHEETS RECORDS PREVIEW
-# =====================================================
 st.divider()
 
-st.header("📄 Google Sheets Records")
+# =====================================================
+# GOOGLE SHEETS RECORDS
+# =====================================================
+st.header("📄 Google Sheets Health Records")
 
 if sheet:
 
     try:
+
         records = sheet.get_all_values()
 
         if records:
@@ -495,9 +586,13 @@ if sheet:
             )
 
         else:
-            st.info("No records found.")
+
+            st.info(
+                "No records available."
+            )
 
     except Exception as e:
+
         st.error(
             f"Unable to load records: {e}"
         )

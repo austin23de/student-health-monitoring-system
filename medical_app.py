@@ -20,22 +20,31 @@ st.title("🏥 Smart Health Monitoring System")
 # GOOGLE SHEETS CONNECTION
 # =========================================================
 
-scope = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive"
-]
+sheet_connected = False
+sheet = None
 
-credentials = ServiceAccountCredentials.from_json_keyfile_name(
-    "credentials.json",
-    scope
-)
+try:
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
 
-client = gspread.authorize(credentials)
+    credentials = ServiceAccountCredentials.from_json_keyfile_name(
+        "credentials.json",
+        scope
+    )
 
-sheet = client.open("HealthMonitoringData").sheet1
+    client = gspread.authorize(credentials)
+
+    sheet = client.open("HealthMonitoringData").sheet1
+
+    sheet_connected = True
+
+except Exception as e:
+    st.error(f"Google Sheets Connection Error: {e}")
 
 # =========================================================
-# API URL
+# API SETTINGS
 # =========================================================
 
 API_URL = "https://healthmonitoring-api.onrender.com/latest"
@@ -50,10 +59,13 @@ st.header("📡 System Status")
 col1, col2 = st.columns(2)
 
 with col1:
-    st.success("Google Sheets Connected")
+    if sheet_connected:
+        st.success("Google Sheets Connected")
+    else:
+        st.error("Google Sheets Not Connected")
 
 with col2:
-    st.success("API Connected")
+    st.success("ESP32 API Ready")
 
 # =========================================================
 # LIVE ESP32 DATA
@@ -68,60 +80,67 @@ if auto_refresh:
     time.sleep(5)
     st.rerun()
 
+live_data = None
+
 try:
-    response = requests.get(API_URL)
+
+    response = requests.get(API_URL, timeout=5)
 
     if response.status_code == 200:
 
         data = response.json()
 
-        if data:
-
-            st.success("Live ESP32 data received")
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.metric(
-                    "🌡 Temperature",
-                    f"{data.get('temperature', 0)} °C"
-                )
-
-                st.metric(
-                    "❤️ Heart Rate",
-                    f"{data.get('heart_rate', 0)} BPM"
-                )
-
-            with col2:
-                st.metric(
-                    "🫁 SpO₂",
-                    f"{data.get('spo2', 0)} %"
-                )
-
-                st.metric(
-                    "⚖ BMI",
-                    f"{data.get('bmi', 0)}"
-                )
-
-            with col3:
-                st.metric(
-                    "📈 Risk Score",
-                    f"{data.get('risk_score', 0)}"
-                )
-
-                st.metric(
-                    "🚨 Severity",
-                    f"{data.get('severity', 'NORMAL')}"
-                )
-
-        else:
-            st.warning("No live ESP32 data available.")
-            st.info("You can activate Manual Override Mode below.")
-
-    else:
-        st.warning("ESP32 API is not responding.")
+        if isinstance(data, dict) and len(data) > 0:
+            live_data = data
 
 except:
+    live_data = None
+
+# =========================================================
+# DISPLAY LIVE DATA
+# =========================================================
+
+if live_data:
+
+    st.success("Live ESP32 data received successfully")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "🌡 Temperature",
+            f"{live_data.get('temperature', 0)} °C"
+        )
+
+        st.metric(
+            "❤️ Heart Rate",
+            f"{live_data.get('heart_rate', 0)} BPM"
+        )
+
+    with col2:
+        st.metric(
+            "🫁 SpO₂",
+            f"{live_data.get('spo2', 0)} %"
+        )
+
+        st.metric(
+            "⚖ BMI",
+            f"{live_data.get('bmi', 0)}"
+        )
+
+    with col3:
+        st.metric(
+            "📈 Risk Score",
+            f"{live_data.get('risk_score', 0)}"
+        )
+
+        st.metric(
+            "🚨 Severity",
+            f"{live_data.get('severity', 'NORMAL')}"
+        )
+
+else:
+
     st.warning("No live ESP32 data available.")
     st.info("You can activate Manual Override Mode below.")
 
@@ -138,58 +157,72 @@ if manual_override:
 
     st.subheader("Enter Student Health Information")
 
+    # =====================================================
+    # BASIC DETAILS
+    # =====================================================
+
     student_id = st.text_input("Student ID")
 
     student_name = st.text_input("Student Name")
 
-    temperature = st.number_input(
-        "Temperature (°C)",
-        min_value=30.0,
-        max_value=45.0,
-        value=36.5
-    )
+    # =====================================================
+    # VITALS
+    # =====================================================
 
-    heart_rate = st.number_input(
-        "Heart Rate (BPM)",
-        min_value=30,
-        max_value=220,
-        value=75
-    )
+    col1, col2 = st.columns(2)
 
-    spo2 = st.number_input(
-        "SpO₂ (%)",
-        min_value=50,
-        max_value=100,
-        value=98
-    )
+    with col1:
 
-    systolic = st.number_input(
-        "Systolic BP",
-        min_value=50,
-        max_value=250,
-        value=120
-    )
+        temperature = st.number_input(
+            "Temperature (°C)",
+            min_value=30.0,
+            max_value=45.0,
+            value=36.5
+        )
 
-    diastolic = st.number_input(
-        "Diastolic BP",
-        min_value=30,
-        max_value=150,
-        value=80
-    )
+        heart_rate = st.number_input(
+            "Heart Rate (BPM)",
+            min_value=30,
+            max_value=220,
+            value=75
+        )
 
-    weight = st.number_input(
-        "Weight (kg)",
-        min_value=10.0,
-        max_value=300.0,
-        value=70.0
-    )
+        spo2 = st.number_input(
+            "SpO₂ (%)",
+            min_value=50,
+            max_value=100,
+            value=98
+        )
 
-    height = st.number_input(
-        "Height (m)",
-        min_value=0.5,
-        max_value=2.5,
-        value=1.70
-    )
+    with col2:
+
+        systolic = st.number_input(
+            "Systolic BP",
+            min_value=50,
+            max_value=250,
+            value=120
+        )
+
+        diastolic = st.number_input(
+            "Diastolic BP",
+            min_value=30,
+            max_value=150,
+            value=80
+        )
+
+        weight = st.number_input(
+            "Weight (kg)",
+            min_value=10.0,
+            max_value=300.0,
+            value=70.0
+        )
+
+        height = st.number_input(
+            "Height (m)",
+            min_value=0.5,
+            max_value=2.5,
+            value=1.70
+        )
 
     # =====================================================
     # BMI CALCULATION
@@ -197,10 +230,8 @@ if manual_override:
 
     bmi = round(weight / (height * height), 2)
 
-    st.metric("⚖ BMI", bmi)
-
     # =====================================================
-    # RISK SCORE
+    # RISK SCORE CALCULATION
     # =====================================================
 
     risk_score = 0
@@ -234,73 +265,92 @@ if manual_override:
         severity = "HIGH"
 
     # =====================================================
-    # SHOW RESULTS
+    # DISPLAY RESULTS
     # =====================================================
 
-    col1, col2 = st.columns(2)
+    st.markdown("---")
+    st.subheader("📊 Health Analysis")
+
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric("📈 Risk Score", risk_score)
+        st.metric("⚖ BMI", bmi)
 
     with col2:
+        st.metric("📈 Risk Score", risk_score)
+
+    with col3:
         st.metric("🚨 Severity", severity)
 
     # =====================================================
-    # SAVE TO GOOGLE SHEETS
+    # SAVE BUTTON
     # =====================================================
 
     if st.button("💾 Save Health Record"):
 
-        row = [
-            student_id,
-            student_name,
-            temperature,
-            heart_rate,
-            spo2,
-            systolic,
-            diastolic,
-            weight,
-            height,
-            bmi,
-            risk_score,
-            severity
-        ]
+        if not sheet_connected:
 
-        try:
+            st.error("Google Sheets is not connected.")
 
-            sheet.append_row(row)
+        else:
 
-            st.success(
-                "Health record saved successfully to Google Sheets."
-            )
+            row = [
+                student_id,
+                student_name,
+                temperature,
+                heart_rate,
+                spo2,
+                systolic,
+                diastolic,
+                weight,
+                height,
+                bmi,
+                risk_score,
+                severity
+            ]
 
-        except Exception as e:
+            try:
 
-            st.error(f"Google Sheets Error: {e}")
+                sheet.append_row(row)
+
+                st.success(
+                    "Health record saved successfully."
+                )
+
+            except Exception as e:
+
+                st.error(f"Save Error: {e}")
 
 # =========================================================
-# SHOW GOOGLE SHEET DATA
+# GOOGLE SHEETS DATA TABLE
 # =========================================================
 
 st.markdown("---")
 st.header("📄 Google Sheets Health Records")
 
-try:
+if sheet_connected:
 
-    records = sheet.get_all_records()
+    try:
 
-    if records:
+        records = sheet.get_all_records()
 
-        df = pd.DataFrame(records)
+        if len(records) > 0:
 
-        st.dataframe(
-            df,
-            use_container_width=True
-        )
+            df = pd.DataFrame(records)
 
-    else:
-        st.info("No health records saved yet.")
+            st.dataframe(
+                df,
+                use_container_width=True
+            )
 
-except Exception as e:
+        else:
 
-    st.error(f"Unable to load Google Sheets data: {e}")
+            st.info("No records found in Google Sheets.")
+
+    except Exception as e:
+
+        st.error(f"Unable to load records: {e}")
+
+else:
+
+    st.warning("Google Sheets data unavailable.")

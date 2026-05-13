@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import time
 import gspread
+
 from oauth2client.service_account import ServiceAccountCredentials
 
 # =========================================================
@@ -15,6 +16,12 @@ st.set_page_config(
 )
 
 st.title("🏥 Smart Health Kiosk Dashboard")
+
+# =========================================================
+# API SETTINGS
+# =========================================================
+
+API_URL = "https://healthmonitoring-api.onrender.com/latest"
 
 # =========================================================
 # GOOGLE SHEETS CONNECTION
@@ -37,7 +44,10 @@ try:
 
     client = gspread.authorize(credentials)
 
-    sheet = client.open("HealthMonitoringData").sheet1
+    # YOUR GOOGLE SHEET NAME
+    sheet = client.open(
+        "Student Health Monitoring System"
+    ).worksheet("Live_Records")
 
     google_connected = True
 
@@ -46,13 +56,7 @@ except Exception as e:
     st.error(f"Google Sheets Error: {e}")
 
 # =========================================================
-# API SETTINGS
-# =========================================================
-
-API_URL = "https://healthmonitoring-api.onrender.com/latest"
-
-# =========================================================
-# GET LIVE DATA
+# GET LIVE ESP32 DATA
 # =========================================================
 
 def get_live_data():
@@ -62,55 +66,193 @@ def get_live_data():
         response = requests.get(API_URL, timeout=10)
 
         if response.status_code == 200:
-
-            data = response.json()
-
-            if isinstance(data, dict):
-                return data
+            return response.json()
 
         return None
 
     except:
         return None
 
+
 # =========================================================
-# LIVE DATA
+# CALCULATE RISK SCORE
 # =========================================================
 
-live_data = get_live_data()
+def calculate_risk(temp, hr, spo2):
+
+    score = 0
+
+    if temp >= 38:
+        score += 2
+
+    if hr >= 120:
+        score += 2
+
+    if spo2 <= 94:
+        score += 3
+
+    return score
+
+
+# =========================================================
+# DETERMINE SEVERITY
+# =========================================================
+
+def determine_severity(score):
+
+    if score >= 5:
+        return "CRITICAL"
+
+    elif score >= 2:
+        return "WARNING"
+
+    else:
+        return "NORMAL"
+
+
+# =========================================================
+# ALERT STATUS
+# =========================================================
+
+def determine_alert(severity):
+
+    if severity == "CRITICAL":
+        return "ALERT"
+
+    return "OK"
+
+
+# =========================================================
+# BMI CALCULATION
+# =========================================================
+
+def calculate_bmi(weight, height_cm):
+
+    try:
+
+        height_m = height_cm / 100
+
+        bmi = weight / (height_m * height_m)
+
+        return round(bmi, 2)
+
+    except:
+        return 0
+
+
+# =========================================================
+# SAVE TO GOOGLE SHEETS
+# =========================================================
+
+def save_to_google_sheets(data):
+
+    if sheet:
+
+        try:
+
+            sheet.append_row([
+                data["student_id"],
+                data["name"],
+                data["temperature"],
+                data["heart_rate"],
+                data["bp"],
+                data["spo2"],
+                data["bmi"],
+                data["risk_score"],
+                data["severity"],
+                data["alert"],
+                time.strftime("%Y-%m-%d %H:%M:%S")
+            ])
+
+            return True
+
+        except Exception as e:
+
+            st.error(f"Google Sheet Save Error: {e}")
+
+            return False
+
+    return False
+
 
 # =========================================================
 # CONNECTION STATUS
 # =========================================================
 
+live_data = get_live_data()
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.success("✅ Streamlit Dashboard Running")
+    st.success("✅ Streamlit Dashboard Online")
 
 with col2:
 
     if google_connected:
         st.success("✅ Google Sheets Connected")
     else:
-        st.error("❌ Google Sheets Not Connected")
+        st.error("❌ Google Sheets Offline")
 
 with col3:
 
     if live_data:
-        st.success("✅ ESP32 API Connected")
+        st.success("✅ ESP32 Connected")
     else:
         st.warning("⚠️ Waiting for ESP32 data...")
+
 
 st.divider()
 
 # =========================================================
-# LIVE HEALTH DATA
+# LIVE ESP32 DATA
 # =========================================================
 
-st.header("📡 Live Student Health Data")
+st.header("📡 Live ESP32 Health Data")
 
 if live_data:
+
+    student_id = live_data.get("student_id", "ST001")
+    name = live_data.get("name", "Unknown")
+
+    temperature = float(live_data.get("temperature", 0))
+    heart_rate = int(live_data.get("heart_rate", 0))
+    spo2 = int(live_data.get("spo2", 0))
+
+    bp = live_data.get("bp", "120/80")
+
+    weight = float(live_data.get("weight", 70))
+    height = float(live_data.get("height", 170))
+
+    bmi = calculate_bmi(weight, height)
+
+    risk_score = calculate_risk(
+        temperature,
+        heart_rate,
+        spo2
+    )
+
+    severity = determine_severity(risk_score)
+
+    alert = determine_alert(severity)
+
+    # =====================================================
+    # SAVE LIVE DATA TO GOOGLE SHEETS
+    # =====================================================
+
+    live_record = {
+        "student_id": student_id,
+        "name": name,
+        "temperature": temperature,
+        "heart_rate": heart_rate,
+        "spo2": spo2,
+        "bp": bp,
+        "bmi": bmi,
+        "risk_score": risk_score,
+        "severity": severity,
+        "alert": alert
+    }
+
+    save_to_google_sheets(live_record)
 
     # =====================================================
     # STUDENT INFO
@@ -121,24 +263,18 @@ if live_data:
     info1, info2, info3 = st.columns(3)
 
     with info1:
-        st.info(
-            f"Student ID: {live_data.get('student_id', 'N/A')}"
-        )
+        st.info(f"Student ID: {student_id}")
 
     with info2:
-        st.info(
-            f"Name: {live_data.get('name', 'N/A')}"
-        )
+        st.info(f"Name: {name}")
 
     with info3:
-        st.info(
-            f"Severity: {live_data.get('severity', 'N/A')}"
-        )
+        st.info(f"Severity: {severity}")
 
     st.divider()
 
     # =====================================================
-    # VITAL SIGNS
+    # VITALS
     # =====================================================
 
     st.subheader("🩺 Vital Signs")
@@ -147,57 +283,53 @@ if live_data:
 
     with c1:
         st.metric(
-            label="🌡 Temperature",
-            value=f"{live_data.get('temperature', '--')} °C"
+            "🌡 Temperature",
+            f"{temperature} °C"
         )
 
     with c2:
         st.metric(
-            label="❤️ Heart Rate",
-            value=f"{live_data.get('heart_rate', '--')} BPM"
+            "❤️ Heart Rate",
+            f"{heart_rate} BPM"
         )
 
     with c3:
         st.metric(
-            label="🫁 SpO₂",
-            value=f"{live_data.get('spo2', '--')} %"
+            "🫁 SpO2",
+            f"{spo2}%"
         )
 
     with c4:
         st.metric(
-            label="⚖ BMI",
-            value=f"{live_data.get('bmi', '--')}"
+            "⚖️ BMI",
+            f"{bmi}"
         )
 
     st.divider()
 
     # =====================================================
-    # EXTRA INFO
+    # RISK SECTION
     # =====================================================
 
-    st.subheader("📋 Additional Information")
+    st.subheader("📋 Risk Analysis")
 
-    d1, d2, d3 = st.columns(3)
+    r1, r2, r3 = st.columns(3)
 
-    with d1:
-        st.info(
-            f"Blood Pressure: {live_data.get('bp', 'N/A')}"
-        )
+    with r1:
+        st.warning(f"Risk Score: {risk_score}")
 
-    with d2:
-        st.info(
-            f"Risk Score: {live_data.get('risk_score', 'N/A')}"
-        )
+    with r2:
+        st.error(f"Severity: {severity}")
 
-    with d3:
-        st.info(
-            f"Alert Status: {live_data.get('alert', 'N/A')}"
-        )
+    with r3:
+        st.info(f"Alert Status: {alert}")
 
 else:
 
-    st.warning("No live health data received from ESP32 yet.")
-    st.info("You can switch to Manual Override Mode below.")
+    st.warning("⚠️ No live ESP32 data available.")
+
+    st.info("You can activate Manual Override Mode below.")
+
 
 st.divider()
 
@@ -205,34 +337,30 @@ st.divider()
 # AUTO REFRESH
 # =========================================================
 
-st.subheader("🔄 Live Monitoring")
+st.header("🔄 Live Monitoring")
 
 auto_refresh = st.toggle("Enable Auto Refresh")
 
 if auto_refresh:
 
     time.sleep(5)
+
     st.rerun()
+
 
 st.divider()
 
 # =========================================================
-# MANUAL OVERRIDE
+# MANUAL OVERRIDE SECTION
 # =========================================================
 
 st.header("🛠 Emergency Manual Override")
 
-manual_override = st.toggle(
-    "Enable Manual Vital Entry"
-)
+manual_mode = st.toggle("Enable Manual Vital Entry")
 
-# =========================================================
-# MANUAL FORM
-# =========================================================
+if manual_mode:
 
-if manual_override:
-
-    st.subheader("📋 Manual Health Data Entry")
+    st.subheader("✍️ Enter Health Data Manually")
 
     with st.form("manual_form"):
 
@@ -240,26 +368,32 @@ if manual_override:
 
         with col1:
 
-            student_id = st.text_input("Student ID")
+            student_id = st.text_input(
+                "Student ID",
+                value="ST001"
+            )
 
-            name = st.text_input("Student Name")
+            name = st.text_input(
+                "Student Name",
+                value="Frank Lee"
+            )
 
             temperature = st.number_input(
-                "Temperature (°C)",
+                "Temperature",
                 value=36.5
             )
 
             heart_rate = st.number_input(
-                "Heart Rate (BPM)",
+                "Heart Rate",
                 value=75
             )
 
+        with col2:
+
             spo2 = st.number_input(
-                "SpO₂ (%)",
+                "SpO2",
                 value=98
             )
-
-        with col2:
 
             weight = st.number_input(
                 "Weight (kg)",
@@ -267,148 +401,67 @@ if manual_override:
             )
 
             height = st.number_input(
-                "Height (m)",
-                value=1.70
+                "Height (cm)",
+                value=170.0
             )
 
-            systolic = st.number_input(
-                "Systolic BP",
-                value=120
+            bp = st.text_input(
+                "Blood Pressure",
+                value="120/80"
             )
-
-            diastolic = st.number_input(
-                "Diastolic BP",
-                value=80
-            )
-
-        # =================================================
-        # BMI CALCULATION
-        # =================================================
-
-        bmi = round(
-            weight / (height * height),
-            2
-        )
-
-        # =================================================
-        # RISK SCORE CALCULATION
-        # =================================================
-
-        risk_score = 0
-
-        if temperature > 38:
-            risk_score += 2
-
-        if heart_rate > 120:
-            risk_score += 2
-
-        if spo2 < 94:
-            risk_score += 3
-
-        if systolic > 140 or diastolic > 90:
-            risk_score += 2
-
-        if bmi > 30:
-            risk_score += 1
-
-        # =================================================
-        # SEVERITY
-        # =================================================
-
-        if risk_score <= 2:
-            severity = "NORMAL"
-
-        elif risk_score <= 5:
-            severity = "WARNING"
-
-        else:
-            severity = "CRITICAL"
-
-        # =================================================
-        # DISPLAY ANALYSIS
-        # =================================================
-
-        st.divider()
-
-        st.subheader("📊 Health Analysis")
-
-        r1, r2, r3 = st.columns(3)
-
-        with r1:
-            st.metric("⚖ BMI", bmi)
-
-        with r2:
-            st.metric("📈 Risk Score", risk_score)
-
-        with r3:
-            st.metric("🚨 Severity", severity)
-
-        # =================================================
-        # SUBMIT BUTTON
-        # =================================================
 
         submit = st.form_submit_button(
-            "💾 Save Health Record"
+            "Save Manual Record"
         )
-
-        # =================================================
-        # SAVE TO GOOGLE SHEETS
-        # =================================================
 
         if submit:
 
-            bp = f"{systolic}/{diastolic}"
+            bmi = calculate_bmi(weight, height)
 
-            manual_data = {
+            risk_score = calculate_risk(
+                temperature,
+                heart_rate,
+                spo2
+            )
+
+            severity = determine_severity(
+                risk_score
+            )
+
+            alert = determine_alert(
+                severity
+            )
+
+            manual_record = {
                 "student_id": student_id,
                 "name": name,
                 "temperature": temperature,
                 "heart_rate": heart_rate,
                 "spo2": spo2,
-                "bmi": bmi,
                 "bp": bp,
+                "bmi": bmi,
                 "risk_score": risk_score,
-                "severity": severity
+                "severity": severity,
+                "alert": alert
             }
 
-            if google_connected:
+            success = save_to_google_sheets(
+                manual_record
+            )
 
-                try:
+            if success:
 
-                    sheet.append_row([
-                        student_id,
-                        name,
-                        temperature,
-                        heart_rate,
-                        spo2,
-                        bmi,
-                        bp,
-                        risk_score,
-                        severity
-                    ])
-
-                    st.success(
-                        "Health data saved successfully."
-                    )
-
-                except Exception as e:
-
-                    st.error(
-                        f"Google Sheets Save Error: {e}"
-                    )
-
-            else:
-
-                st.error(
-                    "Google Sheets not connected."
+                st.success(
+                    "✅ Manual record saved to Google Sheets"
                 )
 
-            st.json(manual_data)
+            st.json(manual_record)
+
 
 st.divider()
 
 # =========================================================
-# GOOGLE SHEETS TABLE
+# SHOW GOOGLE SHEET DATA
 # =========================================================
 
 st.header("📄 Google Sheets Health Records")
@@ -419,7 +472,7 @@ if google_connected:
 
         records = sheet.get_all_records()
 
-        if len(records) > 0:
+        if records:
 
             df = pd.DataFrame(records)
 
@@ -430,18 +483,12 @@ if google_connected:
 
         else:
 
-            st.info(
-                "No records currently stored."
-            )
+            st.info("No records found.")
 
     except Exception as e:
 
-        st.error(
-            f"Unable to load Google Sheet records: {e}"
-        )
+        st.error(f"Error loading sheet data: {e}")
 
 else:
 
-    st.warning(
-        "Google Sheets connection unavailable."
-    )
+    st.warning("Google Sheets not connected.")

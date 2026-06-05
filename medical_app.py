@@ -1,9 +1,11 @@
-import streamlit as st
+import os
+import time
+import zipfile
 import requests
 import pandas as pd
-import time
+import streamlit as st
 import gspread
-import zipfile
+
 from oauth2client.service_account import ServiceAccountCredentials
 from sklearn.ensemble import RandomForestClassifier
 
@@ -80,32 +82,85 @@ def calculate_bmi(weight, height_cm):
         return 0
 
 
-def calculate_risk(temp, hr, spo2):
+def validate_vitals(temp, hr, spo2, bmi):
+    issues = []
+
+    if temp < 30 or temp > 45:
+        issues.append(
+            "Temperature reading is unrealistic. Please check the temperature sensor or manual input."
+        )
+
+    if hr < 30 or hr > 220:
+        issues.append(
+            "Heart rate reading is unrealistic. Please check the heart rate sensor or manual input."
+        )
+
+    if spo2 < 50 or spo2 > 100:
+        issues.append(
+            "SpO₂ reading is impossible or unrealistic. SpO₂ should normally be between 0% and 100%."
+        )
+
+    if bmi < 10 or bmi > 70:
+        issues.append(
+            "BMI reading is unrealistic. Please check height and weight values."
+        )
+
+    return issues
+
+
+def calculate_risk(temp, hr, spo2, bmi, data_issues=None):
     score = 0
 
-    if temp >= 38:
-        score += 2
+    if data_issues:
+        score += 6
 
-    if hr >= 120:
-        score += 2
-
-    if spo2 <= 94:
+    # Temperature scoring
+    if temp >= 40:
+        score += 5
+    elif temp >= 38:
         score += 3
+    elif temp < 35:
+        score += 3
+
+    # Heart rate scoring
+    if hr >= 130:
+        score += 4
+    elif hr >= 100:
+        score += 2
+    elif hr < 50:
+        score += 2
+
+    # SpO2 scoring
+    if spo2 <= 90:
+        score += 5
+    elif spo2 <= 94:
+        score += 3
+
+    # BMI scoring
+    if bmi >= 40:
+        score += 2
+    elif bmi >= 30:
+        score += 1
+    elif bmi < 18.5:
+        score += 1
 
     return score
 
 
-def determine_severity(score):
-    if score >= 5:
+def determine_severity(score, data_issues=None):
+    if data_issues:
         return "CRITICAL"
-    elif score >= 2:
+
+    if score >= 8:
+        return "CRITICAL"
+    elif score >= 4:
         return "WARNING"
     else:
         return "NORMAL"
 
 
-def determine_alert(severity):
-    if severity == "CRITICAL":
+def determine_alert(severity, data_issues=None):
+    if severity == "CRITICAL" or data_issues:
         return "ALERT"
     return "OK"
 
@@ -149,13 +204,29 @@ def load_google_sheet_records():
 
 
 # =========================================================
-# AI MODEL TRAINING FROM ZIP DATASET
+# AI MODEL TRAINING
 # =========================================================
 
 @st.cache_resource
 def train_predictive_model():
     try:
-        zip_path = "archive.zip"
+        possible_zip_files = [
+            "vital_signs_dataset.zip",
+            "archive.zip"
+        ]
+
+        zip_path = None
+
+        for file in possible_zip_files:
+            if os.path.exists(file):
+                zip_path = file
+                break
+
+        if zip_path is None:
+            st.warning(
+                "No AI training ZIP file found. Upload vital_signs_dataset.zip or archive.zip to GitHub."
+            )
+            return None, None, None
 
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             csv_files = [
@@ -164,7 +235,7 @@ def train_predictive_model():
             ]
 
             if not csv_files:
-                st.error("No CSV file found inside archive.zip")
+                st.error("No CSV file found inside the ZIP file.")
                 return None, None, None
 
             csv_file = csv_files[0]
@@ -186,6 +257,12 @@ def train_predictive_model():
                 return None, None, None
 
         df = df[required_columns].dropna()
+
+        if len(df) > 50000:
+            df = df.sample(
+                n=50000,
+                random_state=42
+            )
 
         X = df[
             [
@@ -217,13 +294,23 @@ def train_predictive_model():
 
         return model, feature_importance, len(df)
 
+    except zipfile.BadZipFile:
+        st.error(
+            "❌ AI MODEL TRAINING ERROR: The uploaded ZIP file is not valid. "
+            "Delete it from GitHub and upload a fresh ZIP file."
+        )
+        return None, None, None
+
     except Exception as e:
         st.error("❌ AI MODEL TRAINING ERROR")
         st.exception(e)
         return None, None, None
 
 
-def predict_ai_status(model, temperature, heart_rate, spo2, bmi):
+def predict_ai_status(model, temperature, heart_rate, spo2, bmi, data_issues=None):
+    if data_issues:
+        return "Sensor/Data Error", 1.0
+
     if model is None:
         return "Unavailable", 0
 
@@ -245,7 +332,7 @@ def predict_ai_status(model, temperature, heart_rate, spo2, bmi):
 
 
 # =========================================================
-# AI EXPLANATION FUNCTIONS
+# AI EXPLANATION
 # =========================================================
 
 def generate_ai_interpretation(
@@ -256,15 +343,15 @@ def generate_ai_interpretation(
     risk_score,
     severity,
     predicted_status,
-    confidence
+    confidence,
+    data_issues
 ):
     interpretation = f"""
 ### 🧠 AI Health Interpretation
 
-The student's current rule-based health status is **{severity}**.
-
-The machine-learning model predicts: **{predicted_status}**  
-Prediction confidence: **{confidence * 100:.1f}%**
+**Rule-Based Status:** {severity}  
+**AI Predicted Status:** {predicted_status}  
+**AI Confidence:** {confidence * 100:.1f}%  
 
 **Current Readings**
 - Temperature: {temp} °C
@@ -274,26 +361,39 @@ Prediction confidence: **{confidence * 100:.1f}%**
 - Risk Score: {risk_score}
 """
 
-    if severity == "CRITICAL" or str(predicted_status).lower() in ["critical", "high risk", "high"]:
+    if data_issues:
         interpretation += """
+
+### ⚠️ Data Quality Warning
+
+The system detected unrealistic or impossible readings. This may indicate a sensor problem or incorrect manual entry.
+
+**Recommended Action:**  
+Repeat the measurement and check the sensor placement or entered values before making decisions.
+"""
+        return interpretation
+
+    if severity == "CRITICAL":
+        interpretation += """
+
 **Meaning:**  
 The readings suggest a potentially serious health risk.
 
 **Recommended Action:**  
 Notify a health officer immediately and arrange urgent clinical assessment.
 """
-
-    elif severity == "WARNING" or str(predicted_status).lower() in ["warning", "medium risk", "moderate risk", "medium"]:
+    elif severity == "WARNING":
         interpretation += """
+
 **Meaning:**  
 Some readings are outside the expected range and require closer monitoring.
 
 **Recommended Action:**  
 Allow the student to rest, repeat the vital signs check, and seek medical review if symptoms continue.
 """
-
     else:
         interpretation += """
+
 **Meaning:**  
 The readings appear generally normal based on the current system thresholds and AI prediction.
 
@@ -310,36 +410,36 @@ def symptom_faq(question, temp, hr, spo2, bmi, risk_score, severity):
     if "fever" in question or "temperature" in question:
         return (
             "A high temperature may suggest fever or infection. "
-            "The student should rest, hydrate, and be monitored."
+            "Very high or unrealistic temperature readings should be repeated to confirm accuracy."
         )
 
     if "heart" in question or "pulse" in question or "bpm" in question:
         return (
-            "A high heart rate may occur due to stress, fever, dehydration, activity, or illness. "
-            "If it remains high, medical review is advised."
+            "Heart rate can rise due to stress, fever, dehydration, activity, or illness. "
+            "Very abnormal readings should be checked again."
         )
 
     if "spo2" in question or "oxygen" in question or "breathing" in question:
         return (
-            "Low SpO₂ may indicate reduced oxygen level. "
-            "If the student has breathing difficulty or very low oxygen level, urgent care is needed."
+            "SpO₂ measures blood oxygen saturation. Values above 100% are not physiologically possible, "
+            "so the sensor should be checked if this occurs."
         )
 
     if "bmi" in question or "weight" in question:
         return (
-            "BMI estimates body weight status from height and weight. "
-            "It is useful for screening but should not be used alone to judge health."
+            "BMI estimates body weight status using height and weight. "
+            "It should be interpreted carefully and not used alone for diagnosis."
         )
 
     if "risk" in question or "score" in question or "severity" in question:
         return (
             f"The current risk score is {risk_score}, giving a severity level of {severity}. "
-            "This is based on temperature, heart rate, and oxygen saturation thresholds."
+            "The score is calculated using temperature, heart rate, SpO₂, BMI, and data-quality checks."
         )
 
     if "recommend" in question or "advice" in question or "what should" in question:
         if severity == "CRITICAL":
-            return "Recommendation: Alert a health officer immediately and arrange urgent clinical assessment."
+            return "Recommendation: Repeat abnormal readings, alert a health officer, and arrange urgent assessment if confirmed."
         elif severity == "WARNING":
             return "Recommendation: Monitor the student, allow rest, repeat checks, and seek medical review if symptoms continue."
         else:
@@ -348,18 +448,18 @@ def symptom_faq(question, temp, hr, spo2, bmi, risk_score, severity):
     if "project" in question or "system" in question:
         return (
             "This project is an AI-powered IoT student health monitoring system. "
-            "It collects vital signs, calculates health risk, stores records in Google Sheets, "
+            "It collects vital signs, checks data quality, calculates risk, stores records in Google Sheets, "
             "visualizes trends, and uses machine learning to predict health risk status."
         )
 
     return (
-        "I can answer questions about temperature, fever, heart rate, SpO₂, BMI, risk score, "
+        "I can answer questions about temperature, heart rate, SpO₂, BMI, risk score, "
         "severity level, recommendations, and how this AI health monitoring system works."
     )
 
 
 # =========================================================
-# LOAD DATA AND TRAIN AI
+# LOAD DATA
 # =========================================================
 
 live_data = get_live_data()
@@ -413,6 +513,7 @@ bmi = 0
 risk_score = 0
 severity = "NORMAL"
 alert = "OK"
+data_issues = []
 current_record_available = False
 
 
@@ -435,9 +536,31 @@ if live_data:
     height = float(live_data.get("height", 170))
 
     bmi = calculate_bmi(weight, height)
-    risk_score = calculate_risk(temperature, heart_rate, spo2)
-    severity = determine_severity(risk_score)
-    alert = determine_alert(severity)
+
+    data_issues = validate_vitals(
+        temperature,
+        heart_rate,
+        spo2,
+        bmi
+    )
+
+    risk_score = calculate_risk(
+        temperature,
+        heart_rate,
+        spo2,
+        bmi,
+        data_issues
+    )
+
+    severity = determine_severity(
+        risk_score,
+        data_issues
+    )
+
+    alert = determine_alert(
+        severity,
+        data_issues
+    )
 
     live_record = {
         "student_id": student_id,
@@ -476,7 +599,7 @@ if manual_mode:
 
         with col1:
             student_id = st.text_input("Student ID", value="ST001")
-            name = st.text_input("Student Name", value="Frank Lee")
+            name = st.text_input("Student Name", value="Michael Lee")
             temperature = st.number_input("Temperature °C", value=36.5)
             heart_rate = st.number_input("Heart Rate BPM", value=75)
 
@@ -490,9 +613,31 @@ if manual_mode:
 
         if submit:
             bmi = calculate_bmi(weight, height)
-            risk_score = calculate_risk(temperature, heart_rate, spo2)
-            severity = determine_severity(risk_score)
-            alert = determine_alert(severity)
+
+            data_issues = validate_vitals(
+                temperature,
+                heart_rate,
+                spo2,
+                bmi
+            )
+
+            risk_score = calculate_risk(
+                temperature,
+                heart_rate,
+                spo2,
+                bmi,
+                data_issues
+            )
+
+            severity = determine_severity(
+                risk_score,
+                data_issues
+            )
+
+            alert = determine_alert(
+                severity,
+                data_issues
+            )
 
             manual_record = {
                 "student_id": student_id,
@@ -519,11 +664,16 @@ st.divider()
 
 
 # =========================================================
-# DISPLAY CURRENT VITALS
+# CURRENT HEALTH SUMMARY
 # =========================================================
 
 if current_record_available or manual_mode:
     st.header("👤 Current Student Health Summary")
+
+    if data_issues:
+        st.error("🚨 Data Quality / Sensor Warning Detected")
+        for issue in data_issues:
+            st.warning(issue)
 
     info1, info2, info3 = st.columns(3)
 
@@ -534,7 +684,12 @@ if current_record_available or manual_mode:
         st.info(f"Name: {name}")
 
     with info3:
-        st.info(f"Severity: {severity}")
+        if severity == "CRITICAL":
+            st.error(f"Severity: {severity}")
+        elif severity == "WARNING":
+            st.warning(f"Severity: {severity}")
+        else:
+            st.success(f"Severity: {severity}")
 
     st.subheader("🩺 Vital Signs")
 
@@ -568,9 +723,12 @@ if current_record_available or manual_mode:
             st.success(f"Severity: {severity}")
 
     with r3:
-        st.info(f"Alert Status: {alert}")
+        if alert == "ALERT":
+            st.error(f"Alert Status: {alert}")
+        else:
+            st.info(f"Alert Status: {alert}")
 
-    st.progress(min(risk_score / 7, 1.0))
+    st.progress(min(risk_score / 16, 1.0))
 
 st.divider()
 
@@ -587,7 +745,8 @@ if current_record_available or manual_mode:
         temperature,
         heart_rate,
         spo2,
-        bmi
+        bmi,
+        data_issues
     )
 
     p1, p2, p3 = st.columns(3)
@@ -613,7 +772,8 @@ if current_record_available or manual_mode:
             risk_score,
             severity,
             predicted_status,
-            confidence
+            confidence,
+            data_issues
         )
     )
 
@@ -621,7 +781,7 @@ if current_record_available or manual_mode:
 
     user_question = st.text_input(
         "Ask MedExplain AI",
-        placeholder="Example: What does this risk score mean?"
+        placeholder="Example: Why is SpO₂ above 100% a problem?"
     )
 
     if user_question:
@@ -650,9 +810,7 @@ st.header("📊 AI Model Feature Importance")
 
 if feature_importance is not None:
     st.dataframe(feature_importance, use_container_width=True)
-    st.bar_chart(
-        feature_importance.set_index("Feature")
-    )
+    st.bar_chart(feature_importance.set_index("Feature"))
 else:
     st.info("Feature importance will appear when the AI model is trained.")
 

@@ -18,12 +18,16 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from disease_kb_700 import DISEASE_KB_700
 
 
+# =========================================================
+# PAGE CONFIG
+# =========================================================
+
 st.set_page_config(
     page_title="Hybrid AI Clinical Triage System",
     layout="wide"
 )
 
-st.title("🏥 Student Health Monitoring and diagnostic System")
+st.title("🏥 Student Health Monitoring and Diagnostic System")
 
 st.caption(
     "Educational triage-support system only. "
@@ -71,9 +75,12 @@ except Exception as e:
 def get_live_data():
     try:
         response = requests.get(API_URL, timeout=10)
+
         if response.status_code == 200:
             return response.json()
+
         return None
+
     except Exception:
         return None
 
@@ -81,7 +88,9 @@ def get_live_data():
 def calculate_bmi(weight, height_cm):
     try:
         height_m = height_cm / 100
-        return round(weight / (height_m * height_m), 2)
+        bmi = weight / (height_m * height_m)
+        return round(bmi, 2)
+
     except Exception:
         return 0
 
@@ -90,6 +99,7 @@ def split_bp(bp):
     try:
         systolic, diastolic = bp.split("/")
         return int(systolic), int(diastolic)
+
     except Exception:
         return 120, 80
 
@@ -121,14 +131,19 @@ def validate_vitals(temp, hr, spo2, bmi, systolic, diastolic):
 def emergency_override(temp, hr, spo2, systolic, diastolic, data_issues):
     if data_issues:
         return True
+
     if temp >= 40:
         return True
+
     if spo2 <= 90:
         return True
+
     if hr >= 130:
         return True
+
     if systolic >= 180 or diastolic >= 120:
         return True
+
     return False
 
 
@@ -138,6 +153,7 @@ def calculate_risk(temp, hr, spo2, bmi, systolic, diastolic, data_issues=None):
     if data_issues:
         score += 6
 
+    # Temperature
     if temp >= 40:
         score += 5
     elif temp >= 38:
@@ -145,6 +161,7 @@ def calculate_risk(temp, hr, spo2, bmi, systolic, diastolic, data_issues=None):
     elif temp < 35:
         score += 3
 
+    # Heart rate
     if hr >= 130:
         score += 4
     elif hr >= 100:
@@ -152,11 +169,13 @@ def calculate_risk(temp, hr, spo2, bmi, systolic, diastolic, data_issues=None):
     elif hr < 50:
         score += 2
 
+    # Oxygen saturation
     if spo2 <= 90:
         score += 5
     elif spo2 <= 94:
         score += 3
 
+    # BMI
     if bmi >= 40:
         score += 2
     elif bmi >= 30:
@@ -164,6 +183,7 @@ def calculate_risk(temp, hr, spo2, bmi, systolic, diastolic, data_issues=None):
     elif bmi < 18.5:
         score += 1
 
+    # Blood pressure
     if systolic >= 180 or diastolic >= 120:
         score += 5
     elif systolic >= 140 or diastolic >= 90:
@@ -175,6 +195,7 @@ def calculate_risk(temp, hr, spo2, bmi, systolic, diastolic, data_issues=None):
 def determine_severity(score, override=False):
     if override:
         return "CRITICAL"
+
     if score >= 8:
         return "CRITICAL"
     elif score >= 4:
@@ -184,7 +205,10 @@ def determine_severity(score, override=False):
 
 
 def determine_alert(severity):
-    return "ALERT" if severity == "CRITICAL" else "OK"
+    if severity == "CRITICAL":
+        return "ALERT"
+
+    return "OK"
 
 
 def save_to_google_sheets(data):
@@ -203,7 +227,9 @@ def save_to_google_sheets(data):
                 data["alert"],
                 time.strftime("%Y-%m-%d %H:%M:%S")
             ])
+
             return True
+
         except Exception as e:
             st.error("❌ GOOGLE SHEET SAVE ERROR")
             st.exception(e)
@@ -215,7 +241,9 @@ def save_to_google_sheets(data):
 def load_google_sheet_records():
     if sheet is not None:
         try:
-            return pd.DataFrame(sheet.get_all_records())
+            records = sheet.get_all_records()
+            return pd.DataFrame(records)
+
         except Exception as e:
             st.error("❌ ERROR LOADING GOOGLE SHEET DATA")
             st.exception(e)
@@ -230,16 +258,20 @@ def load_google_sheet_records():
 def fuzzy_membership_low(value, low, high):
     if value <= low:
         return 1
+
     if value >= high:
         return 0
+
     return (high - value) / (high - low)
 
 
 def fuzzy_membership_high(value, low, high):
     if value <= low:
         return 0
+
     if value >= high:
         return 1
+
     return (value - low) / (high - low)
 
 
@@ -267,9 +299,7 @@ def fuzzy_health_risk(temp, hr, spo2, bmi, systolic, diastolic):
     elif fuzzy_score >= 0.35:
         return "WARNING", fuzzy_score
     else:
-        return "NORMAL", fuzzy_score
-
-
+        return "NORMAL", fuzzy_score 
 # =========================================================
 # HYBRID AI MODEL TRAINING
 # =========================================================
@@ -290,7 +320,7 @@ def train_hybrid_models():
                 break
 
         if zip_path is None:
-            st.warning("No AI training ZIP file found.")
+            st.warning("No AI training ZIP file found. Upload vital_signs_dataset.zip or archive.zip.")
             return None, None, None, None, None, None, None
 
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
@@ -337,6 +367,8 @@ def train_hybrid_models():
 
         df = df[required_columns].dropna()
 
+        # Streamlit Cloud stability limit.
+        # You can remove this block if your app can handle the full dataset.
         if len(df) > 50000:
             df = df.sample(n=50000, random_state=42)
 
@@ -362,6 +394,7 @@ def train_hybrid_models():
             stratify=y
         )
 
+        # Random Forest model
         rf_model = RandomForestClassifier(
             n_estimators=150,
             max_depth=12,
@@ -369,6 +402,7 @@ def train_hybrid_models():
             class_weight="balanced"
         )
 
+        # ANN model using Multi-Layer Perceptron
         ann_model = Pipeline([
             ("scaler", StandardScaler()),
             ("ann", MLPClassifier(
@@ -390,16 +424,46 @@ def train_hybrid_models():
 
         rf_metrics = {
             "Accuracy": accuracy_score(y_test, rf_pred),
-            "Precision": precision_score(y_test, rf_pred, average="weighted", zero_division=0),
-            "Recall": recall_score(y_test, rf_pred, average="weighted", zero_division=0),
-            "F1 Score": f1_score(y_test, rf_pred, average="weighted", zero_division=0)
+            "Precision": precision_score(
+                y_test,
+                rf_pred,
+                average="weighted",
+                zero_division=0
+            ),
+            "Recall": recall_score(
+                y_test,
+                rf_pred,
+                average="weighted",
+                zero_division=0
+            ),
+            "F1 Score": f1_score(
+                y_test,
+                rf_pred,
+                average="weighted",
+                zero_division=0
+            )
         }
 
         ann_metrics = {
             "Accuracy": accuracy_score(y_test, ann_pred),
-            "Precision": precision_score(y_test, ann_pred, average="weighted", zero_division=0),
-            "Recall": recall_score(y_test, ann_pred, average="weighted", zero_division=0),
-            "F1 Score": f1_score(y_test, ann_pred, average="weighted", zero_division=0)
+            "Precision": precision_score(
+                y_test,
+                ann_pred,
+                average="weighted",
+                zero_division=0
+            ),
+            "Recall": recall_score(
+                y_test,
+                ann_pred,
+                average="weighted",
+                zero_division=0
+            ),
+            "F1 Score": f1_score(
+                y_test,
+                ann_pred,
+                average="weighted",
+                zero_division=0
+            )
         }
 
         rf_cm = pd.DataFrame(
@@ -451,8 +515,17 @@ def train_hybrid_models():
 
 
 # =========================================================
-# HYBRID AI PREDICTION
+# HYBRID AI PREDICTION FUNCTIONS
 # =========================================================
+
+def get_confidence_level(confidence):
+    if confidence >= 0.90:
+        return "High Confidence"
+    elif confidence >= 0.70:
+        return "Moderate Confidence"
+    else:
+        return "Low Confidence"
+
 
 def majority_vote(predictions):
     return max(set(predictions), key=predictions.count)
@@ -488,7 +561,15 @@ def predict_hybrid_ai(
             "Confidence": 0.0
         }
 
-    input_data = [[temp, hr, spo2, bmi, systolic, diastolic, age]]
+    input_data = [[
+        temp,
+        hr,
+        spo2,
+        bmi,
+        systolic,
+        diastolic,
+        age
+    ]]
 
     rf_prediction = rf_model.predict(input_data)[0]
     ann_prediction = ann_model.predict(input_data)[0]
@@ -497,7 +578,12 @@ def predict_hybrid_ai(
     ann_confidence = max(ann_model.predict_proba(input_data)[0])
 
     fuzzy_prediction, fuzzy_score = fuzzy_health_risk(
-        temp, hr, spo2, bmi, systolic, diastolic
+        temp,
+        hr,
+        spo2,
+        bmi,
+        systolic,
+        diastolic
     )
 
     ensemble_prediction = majority_vote([
@@ -506,7 +592,11 @@ def predict_hybrid_ai(
         str(fuzzy_prediction)
     ])
 
-    ensemble_confidence = (rf_confidence + ann_confidence + fuzzy_score) / 3
+    ensemble_confidence = (
+        rf_confidence +
+        ann_confidence +
+        fuzzy_score
+    ) / 3
 
     return {
         "Random Forest": rf_prediction,
@@ -515,38 +605,66 @@ def predict_hybrid_ai(
         "Ensemble": ensemble_prediction,
         "Confidence": ensemble_confidence
     }
-
-
 # =========================================================
 # 700-CONDITION DISEASE KNOWLEDGE BASE HELPERS
 # =========================================================
 
 def get_disease_name(entry):
-    return entry.get("disease_name", "Unknown Condition")
+    return (
+        entry.get("disease_name")
+        or entry.get("condition")
+        or entry.get("name")
+        or "Unknown Condition"
+    )
 
 
 def get_common_symptoms(entry):
-    return entry.get("common_symptoms", [])
+    return (
+        entry.get("common_symptoms")
+        or entry.get("symptoms")
+        or []
+    )
 
 
 def get_red_flags(entry):
-    return entry.get("red_flags", [])
+    return (
+        entry.get("red_flags")
+        or entry.get("emergency_symptoms")
+        or []
+    )
 
 
 def get_follow_up_questions(entry):
-    return entry.get("follow_up_questions", [])
+    return (
+        entry.get("follow_up_questions")
+        or entry.get("follow_up")
+        or []
+    )
 
 
 def get_triage_advice(entry):
-    return entry.get("triage_advice", "Medical review is recommended if symptoms persist or worsen.")
+    return (
+        entry.get("triage_advice")
+        or entry.get("advice")
+        or "Medical review is recommended if symptoms persist or worsen."
+    )
 
 
 def get_overview(entry):
-    return entry.get("overview", "")
+    return (
+        entry.get("overview")
+        or entry.get("description")
+        or ""
+    )
 
 
 def get_scope(entry):
-    return entry.get("clinical_scope", "General")
+    return (
+        entry.get("clinical_scope")
+        or entry.get("scope")
+        or entry.get("category")
+        or "General"
+    )
 
 
 @st.cache_data
@@ -555,9 +673,10 @@ def get_symptom_options():
 
     for entry in DISEASE_KB_700:
         for symptom in get_common_symptoms(entry):
-            symptoms.add(symptom.lower().strip())
+            symptoms.add(str(symptom).lower().strip())
+
         for symptom in get_red_flags(entry):
-            symptoms.add(symptom.lower().strip())
+            symptoms.add(str(symptom).lower().strip())
 
     return sorted(list(symptoms))
 
@@ -575,6 +694,7 @@ def extract_symptoms_from_text(text):
 
     for symptom in SYMPTOM_OPTIONS:
         pattern = r"\b" + re.escape(symptom) + r"\b"
+
         if re.search(pattern, text):
             found.append(symptom)
 
@@ -582,37 +702,74 @@ def extract_symptoms_from_text(text):
 
 
 def calculate_condition_probabilities(selected_symptoms):
-    selected = [normalize_text(s) for s in selected_symptoms]
+    selected = [
+        normalize_text(symptom)
+        for symptom in selected_symptoms
+    ]
+
     results = []
 
     for entry in DISEASE_KB_700:
         disease_name = get_disease_name(entry)
-        common_symptoms = [normalize_text(s) for s in get_common_symptoms(entry)]
-        red_flags = [normalize_text(s) for s in get_red_flags(entry)]
 
-        matched_symptoms = [s for s in selected if s in common_symptoms]
-        matched_red_flags = [s for s in selected if s in red_flags]
+        common_symptoms = [
+            normalize_text(symptom)
+            for symptom in get_common_symptoms(entry)
+        ]
+
+        red_flags = [
+            normalize_text(symptom)
+            for symptom in get_red_flags(entry)
+        ]
+
+        matched_symptoms = [
+            symptom
+            for symptom in selected
+            if symptom in common_symptoms
+        ]
+
+        matched_red_flags = [
+            symptom
+            for symptom in selected
+            if symptom in red_flags
+        ]
 
         if len(common_symptoms) > 0:
             symptom_match_score = len(matched_symptoms) / len(common_symptoms)
         else:
             symptom_match_score = 0
 
-        red_flag_bonus = min(len(matched_red_flags) * 0.12, 0.30)
+        red_flag_bonus = min(
+            len(matched_red_flags) * 0.12,
+            0.30
+        )
 
-        final_score = min(symptom_match_score + red_flag_bonus, 1.0)
+        final_score = min(
+            symptom_match_score + red_flag_bonus,
+            1.0
+        )
 
         results.append({
             "Possible Condition": disease_name,
             "Clinical Scope": get_scope(entry),
             "Match Score (%)": round(final_score * 100, 1),
-            "Matched Symptoms": ", ".join(matched_symptoms) if matched_symptoms else "None",
-            "Red Flags": ", ".join(matched_red_flags) if matched_red_flags else "None",
+            "Matched Symptoms": (
+                ", ".join(matched_symptoms)
+                if matched_symptoms
+                else "None"
+            ),
+            "Red Flags": (
+                ", ".join(matched_red_flags)
+                if matched_red_flags
+                else "None"
+            ),
             "Triage Advice": get_triage_advice(entry),
             "Overview": get_overview(entry)
         })
 
-    return pd.DataFrame(results).sort_values(
+    results_df = pd.DataFrame(results)
+
+    return results_df.sort_values(
         by="Match Score (%)",
         ascending=False
     )
@@ -624,7 +781,9 @@ def get_dynamic_followup_questions(top_condition_names):
     for condition_name in top_condition_names:
         for entry in DISEASE_KB_700:
             if get_disease_name(entry) == condition_name:
-                questions.extend(get_follow_up_questions(entry))
+                questions.extend(
+                    get_follow_up_questions(entry)
+                )
 
     unique_questions = []
 
@@ -635,15 +794,248 @@ def get_dynamic_followup_questions(top_condition_names):
     return unique_questions[:10]
 
 
-def map_followup_answer_to_symptoms(question):
+def get_answer_options_for_question(question):
+    q = question.lower()
+
+    if (
+        "mild" in q
+        or "moderate" in q
+        or "severe" in q
+        or "severity" in q
+        or "how severe" in q
+    ):
+        return [
+            "Not sure",
+            "Mild",
+            "Moderate",
+            "Severe"
+        ]
+
+    if (
+        "how long" in q
+        or "duration" in q
+        or "how many days" in q
+        or "when did" in q
+    ):
+        return [
+            "Less than 1 day",
+            "1–3 days",
+            "More than 3 days",
+            "More than 1 week",
+            "Not sure"
+        ]
+
+    if (
+        "catarrh" in q
+        or "runny" in q
+        or "nasal" in q
+        or "discharge" in q
+        or "mucus" in q
+    ):
+        return [
+            "No",
+            "Watery/clear",
+            "Thick/yellow-green",
+            "Bloody",
+            "Blocked nose",
+            "Not sure"
+        ]
+
+    if "cough" in q:
+        return [
+            "No",
+            "Dry cough",
+            "Productive cough with phlegm",
+            "Cough with blood",
+            "Persistent cough",
+            "Not sure"
+        ]
+
+    if (
+        "pain" in q
+        or "ache" in q
+        or "throat" in q
+        or "headache" in q
+    ):
+        return [
+            "No",
+            "Mild",
+            "Moderate",
+            "Severe",
+            "Not sure"
+        ]
+
+    if (
+        "fever" in q
+        or "temperature" in q
+        or "hot" in q
+    ):
+        return [
+            "No",
+            "Mild fever",
+            "High fever",
+            "Fever with chills",
+            "Not sure"
+        ]
+
+    if (
+        "breathing" in q
+        or "breath" in q
+        or "shortness" in q
+    ):
+        return [
+            "No",
+            "Mild difficulty",
+            "Moderate difficulty",
+            "Severe difficulty",
+            "Not sure"
+        ]
+
+    if (
+        "vomit" in q
+        or "vomiting" in q
+        or "diarrhea" in q
+        or "stool" in q
+    ):
+        return [
+            "No",
+            "Once",
+            "Several times",
+            "Persistent",
+            "Bloody",
+            "Not sure"
+        ]
+
+    if (
+        "eye" in q
+        or "itch" in q
+        or "watery" in q
+    ):
+        return [
+            "No",
+            "Itchy eyes",
+            "Watery eyes",
+            "Red eyes",
+            "Not sure"
+        ]
+
+    if (
+        "smell" in q
+        or "taste" in q
+    ):
+        return [
+            "No",
+            "Reduced",
+            "Completely lost",
+            "Not sure"
+        ]
+
+    return [
+        "No",
+        "Yes",
+        "Not sure"
+    ]
+
+
+def map_followup_answer_to_symptoms(question, answer):
     q = normalize_text(question)
+    a = normalize_text(answer)
+
     detected = []
 
+    if answer in ["No", "Not sure"]:
+        return detected
+
+    # Use symptoms already present in the question text
     for symptom in SYMPTOM_OPTIONS:
         if symptom in q:
             detected.append(symptom)
 
-    return detected
+    # Use answer content to add richer symptom details
+    if "dry cough" in a:
+        detected.append("dry cough")
+
+    if "productive cough" in a or "phlegm" in a:
+        detected.append("productive cough")
+        detected.append("phlegm")
+
+    if "cough with blood" in a:
+        detected.append("coughing blood")
+
+    if "persistent cough" in a:
+        detected.append("persistent cough")
+
+    if "watery" in a or "clear" in a:
+        detected.append("watery catarrh")
+        detected.append("runny nose")
+
+    if "thick" in a or "yellow" in a or "green" in a:
+        detected.append("thick catarrh")
+
+    if "bloody" in a:
+        detected.append("blood in discharge")
+
+    if "blocked nose" in a:
+        detected.append("blocked nose")
+
+    if "mild fever" in a:
+        detected.append("fever")
+
+    if "high fever" in a:
+        detected.append("high fever")
+        detected.append("fever")
+
+    if "fever with chills" in a:
+        detected.append("fever")
+        detected.append("chills")
+
+    if "mild difficulty" in a:
+        detected.append("breathing difficulty")
+
+    if "moderate difficulty" in a:
+        detected.append("breathing difficulty")
+
+    if "severe difficulty" in a:
+        detected.append("severe breathing difficulty")
+        detected.append("breathing difficulty")
+
+    if "mild" in a and ("pain" in q or "ache" in q or "throat" in q):
+        detected.append("mild pain")
+
+    if "moderate" in a and ("pain" in q or "ache" in q or "throat" in q):
+        detected.append("moderate pain")
+
+    if "severe" in a and ("pain" in q or "ache" in q or "throat" in q):
+        detected.append("severe pain")
+
+    if "several times" in a or "persistent" in a:
+        if "vomit" in q:
+            detected.append("persistent vomiting")
+        if "diarrhea" in q or "stool" in q:
+            detected.append("persistent diarrhea")
+
+    if "itchy eyes" in a:
+        detected.append("itchy eyes")
+
+    if "watery eyes" in a:
+        detected.append("watery eyes")
+
+    if "red eyes" in a:
+        detected.append("red eyes")
+
+    if "reduced" in a and "smell" in q:
+        detected.append("reduced smell")
+
+    if "completely lost" in a and "smell" in q:
+        detected.append("loss of smell")
+
+    if "reduced" in a and "taste" in q:
+        detected.append("reduced taste")
+
+    if "completely lost" in a and "taste" in q:
+        detected.append("loss of taste")
+
+    return sorted(list(set(detected)))
 
 
 # =========================================================
@@ -671,7 +1063,9 @@ def clinical_interview_assistant(severity, alert):
     extracted_symptoms = extract_symptoms_from_text(free_text)
 
     if extracted_symptoms:
-        st.success(f"Symptoms detected from text: {', '.join(extracted_symptoms)}")
+        st.success(
+            f"Symptoms detected from text: {', '.join(extracted_symptoms)}"
+        )
 
     selected_symptoms = st.multiselect(
         "Select or confirm symptoms:",
@@ -689,27 +1083,39 @@ def clinical_interview_assistant(severity, alert):
         ]
     )
 
-    medication = st.text_input("Has the patient taken any medication? If yes, specify.")
-    extra_notes = st.text_area("Any additional complaint or context?")
+    medication = st.text_input(
+        "Has the patient taken any medication? If yes, specify."
+    )
+
+    extra_notes = st.text_area(
+        "Any additional complaint or context?"
+    )
 
     if st.button("Analyze Symptoms"):
         if not selected_symptoms:
             st.warning("Please select or type at least one symptom.")
             return
 
-        disease_results = calculate_condition_probabilities(selected_symptoms)
+        disease_results = calculate_condition_probabilities(
+            selected_symptoms
+        )
 
         st.session_state["disease_results"] = disease_results
         st.session_state["selected_symptoms"] = selected_symptoms
         st.session_state["duration"] = duration
         st.session_state["medication"] = medication
         st.session_state["extra_notes"] = extra_notes
-        st.session_state["top_conditions"] = disease_results.head(5)["Possible Condition"].tolist()
+        st.session_state["top_conditions"] = (
+            disease_results
+            .head(5)["Possible Condition"]
+            .tolist()
+        )
 
     if "disease_results" in st.session_state:
         disease_results = st.session_state["disease_results"]
 
         st.subheader("Initial Possible Condition Ranking")
+
         st.dataframe(
             disease_results[
                 [
@@ -728,7 +1134,9 @@ def clinical_interview_assistant(severity, alert):
         st.subheader("Most Relevant Screening Possibilities")
 
         for _, row in disease_results.head(5).iterrows():
-            with st.expander(f"{row['Possible Condition']} — {row['Match Score (%)']}% match"):
+            with st.expander(
+                f"{row['Possible Condition']} — {row['Match Score (%)']}% match"
+            ):
                 st.write(row["Overview"])
                 st.write(f"**Matched symptoms:** {row['Matched Symptoms']}")
                 st.write(f"**Red flags:** {row['Red Flags']}")
@@ -737,28 +1145,38 @@ def clinical_interview_assistant(severity, alert):
         st.subheader("Dynamic Follow-Up Questions")
 
         questions = get_dynamic_followup_questions(top_conditions)
-
         added_symptoms = []
 
         with st.form("followup_form"):
             for question in questions:
                 answer = st.selectbox(
                     question,
-                    ["No", "Yes"],
+                    get_answer_options_for_question(question),
                     key=f"followup_{question}"
                 )
 
-                if answer == "Yes":
-                    added_symptoms.extend(map_followup_answer_to_symptoms(question))
+                added_symptoms.extend(
+                    map_followup_answer_to_symptoms(question, answer)
+                )
 
-            submit_refined = st.form_submit_button("Refine Possible Conditions")
+            submit_refined = st.form_submit_button(
+                "Refine Possible Conditions"
+            )
 
         if submit_refined:
-            refined_symptoms = list(set(st.session_state["selected_symptoms"] + added_symptoms))
-            refined_results = calculate_condition_probabilities(refined_symptoms)
+            refined_symptoms = list(set(
+                st.session_state["selected_symptoms"] +
+                added_symptoms
+            ))
+
+            refined_results = calculate_condition_probabilities(
+                refined_symptoms
+            )
+
             best_match = refined_results.iloc[0]
 
             st.subheader("Refined Possible Condition Ranking")
+
             st.dataframe(
                 refined_results[
                     [
@@ -775,29 +1193,44 @@ def clinical_interview_assistant(severity, alert):
             st.subheader("AI Triage Screening Summary")
 
             st.warning(
-                f"Most likely screening match: {best_match['Possible Condition']} "
+                f"Most likely screening match: "
+                f"{best_match['Possible Condition']} "
                 f"({best_match['Match Score (%)']}% symptom match)"
             )
 
             st.write(f"Duration: {st.session_state['duration']}")
 
             if st.session_state["medication"]:
-                st.write(f"Medication reported: {st.session_state['medication']}")
+                st.write(
+                    f"Medication reported: {st.session_state['medication']}"
+                )
             else:
                 st.write("No medication was reported.")
 
             if st.session_state["extra_notes"]:
-                st.write(f"Additional complaint: {st.session_state['extra_notes']}")
+                st.write(
+                    f"Additional complaint: {st.session_state['extra_notes']}"
+                )
 
             if best_match["Red Flags"] != "None":
-                st.error("Red-flag symptom pattern detected. Medical review is recommended urgently.")
+                st.error(
+                    "Red-flag symptom pattern detected. "
+                    "Medical review is recommended urgently."
+                )
             elif best_match["Match Score (%)"] >= 60:
-                st.warning("Significant symptom match detected. Medical review is recommended for proper diagnosis.")
+                st.warning(
+                    "Significant symptom match detected. "
+                    "Medical review is recommended for proper diagnosis."
+                )
             else:
-                st.info("Symptoms appear mild to moderate based on screening. Continue monitoring and seek review if symptoms worsen.")
+                st.info(
+                    "Symptoms appear mild to moderate based on screening. "
+                    "Continue monitoring and seek review if symptoms worsen."
+                )
 
             st.caption(
-                "This result is screening support only. It does not confirm a medical diagnosis."
+                "This result is screening support only. "
+                "It does not confirm a medical diagnosis."
             )
 
 
@@ -809,25 +1242,37 @@ def medical_explanation_assistant(question, risk_score, severity):
     question_lower = normalize_text(question)
 
     if "risk" in question_lower or "score" in question_lower:
-        return f"The current risk score is {risk_score}, giving a severity level of {severity}."
+        return (
+            f"The current risk score is {risk_score}, "
+            f"giving a severity level of {severity}."
+        )
 
     if "spo2" in question_lower or "oxygen" in question_lower:
         return (
-            "SpO₂ measures blood oxygen saturation. Low SpO₂ can be serious, "
-            "while values above 100% usually indicate sensor error."
+            "SpO₂ measures blood oxygen saturation. "
+            "Low SpO₂ can be serious, while values above 100% usually indicate sensor error."
         )
 
     if "ann" in question_lower or "neural" in question_lower:
-        return "The ANN learns patterns from vital signs to classify health risk."
+        return (
+            "The ANN learns patterns from vital signs to classify health risk."
+        )
 
     if "fuzzy" in question_lower:
-        return "Fuzzy logic handles uncertainty by converting readings into degrees such as mildly high, moderately high, or critically high."
+        return (
+            "Fuzzy logic handles uncertainty by converting readings into degrees "
+            "such as mildly high, moderately high, or critically high."
+        )
 
     if "random forest" in question_lower:
-        return "Random Forest combines multiple decision trees to classify health risk."
+        return (
+            "Random Forest combines multiple decision trees to classify health risk."
+        )
 
     if "ensemble" in question_lower:
-        return "The ensemble combines Random Forest, ANN, and fuzzy logic into one final decision."
+        return (
+            "The ensemble combines Random Forest, ANN, and fuzzy logic into one final decision."
+        )
 
     matched_conditions = []
 
@@ -839,6 +1284,7 @@ def medical_explanation_assistant(question, risk_score, severity):
 
     if matched_conditions:
         entry = matched_conditions[0]
+
         return (
             f"{get_disease_name(entry)}: {get_overview(entry)} "
             f"Triage advice: {get_triage_advice(entry)}"
@@ -858,11 +1304,10 @@ def medical_explanation_assistant(question, risk_score, severity):
         )
 
     return (
-        "Ask about symptoms, possible conditions, SpO₂, risk score, ANN, Random Forest, fuzzy logic, or ensemble AI. "
-        "For disease narrowing, use the 700-condition clinical interview assistant."
+        "Ask about symptoms, possible conditions, SpO₂, risk score, ANN, "
+        "Random Forest, fuzzy logic, or ensemble AI. For disease narrowing, "
+        "use the 700-condition clinical interview assistant."
     )
-
-
 # =========================================================
 # LOAD DATA
 # =========================================================
@@ -908,6 +1353,7 @@ with col4:
     else:
         st.warning("⚠️ Hybrid AI Not Ready")
 
+
 st.divider()
 
 
@@ -952,6 +1398,7 @@ if live_data:
     spo2 = int(live_data.get("spo2", 0))
     bp = live_data.get("bp", "120/80")
     age = int(live_data.get("age", 18))
+
     weight = float(live_data.get("weight", 70))
     height = float(live_data.get("height", 170))
 
@@ -1008,6 +1455,7 @@ else:
     st.warning("⚠️ No live ESP32 data available.")
     st.info("Use Manual Vital Entry below for testing.")
 
+
 st.divider()
 
 
@@ -1026,15 +1474,38 @@ if manual_mode:
         with col1:
             student_id = st.text_input("Student ID", value="ST001")
             name = st.text_input("Student Name", value="Michael Lee")
-            age = st.number_input("Age", value=18, min_value=1, max_value=120)
-            temperature = st.number_input("Temperature °C", value=36.5)
-            heart_rate = st.number_input("Heart Rate BPM", value=75)
+            age = st.number_input(
+                "Age",
+                value=18,
+                min_value=1,
+                max_value=120
+            )
+            temperature = st.number_input(
+                "Temperature °C",
+                value=36.5
+            )
+            heart_rate = st.number_input(
+                "Heart Rate BPM",
+                value=75
+            )
 
         with col2:
-            spo2 = st.number_input("SpO₂ %", value=98)
-            weight = st.number_input("Weight kg", value=70.0)
-            height = st.number_input("Height cm", value=170.0)
-            bp = st.text_input("Blood Pressure", value="120/80")
+            spo2 = st.number_input(
+                "SpO₂ %",
+                value=98
+            )
+            weight = st.number_input(
+                "Weight kg",
+                value=70.0
+            )
+            height = st.number_input(
+                "Height cm",
+                value=170.0
+            )
+            bp = st.text_input(
+                "Blood Pressure",
+                value="120/80"
+            )
 
         submit = st.form_submit_button("Save Manual Record")
 
@@ -1070,7 +1541,10 @@ if manual_mode:
                 data_issues
             )
 
-            severity = determine_severity(risk_score, override_active)
+            severity = determine_severity(
+                risk_score,
+                override_active
+            )
             alert = determine_alert(severity)
 
             save_to_google_sheets({
@@ -1089,11 +1563,12 @@ if manual_mode:
             current_record_available = True
             st.success("✅ Manual record processed and saved.")
 
+
 st.divider()
 
 
 # =========================================================
-# CURRENT SUMMARY
+# CURRENT STUDENT HEALTH SUMMARY
 # =========================================================
 
 if current_record_available or manual_mode:
@@ -1101,6 +1576,7 @@ if current_record_available or manual_mode:
 
     if data_issues:
         st.error("🚨 Data Quality / Sensor Warning Detected")
+
         for issue in data_issues:
             st.warning(issue)
 
@@ -1158,7 +1634,12 @@ if current_record_available or manual_mode:
         st.warning(f"Risk Score: {risk_score}")
 
     with r2:
-        st.warning(f"Severity: {severity}")
+        if severity == "CRITICAL":
+            st.error(f"Severity: {severity}")
+        elif severity == "WARNING":
+            st.warning(f"Severity: {severity}")
+        else:
+            st.success(f"Severity: {severity}")
 
     with r3:
         if alert == "ALERT":
@@ -1167,6 +1648,7 @@ if current_record_available or manual_mode:
             st.info(f"Alert Status: {alert}")
 
     st.progress(min(risk_score / 18, 1.0))
+
 
 st.divider()
 
@@ -1194,16 +1676,28 @@ if current_record_available or manual_mode:
     h1, h2, h3, h4 = st.columns(4)
 
     with h1:
-        st.metric("Random Forest", hybrid_result["Random Forest"])
+        st.metric(
+            "Random Forest",
+            hybrid_result["Random Forest"]
+        )
 
     with h2:
-        st.metric("ANN", hybrid_result["ANN"])
+        st.metric(
+            "ANN",
+            hybrid_result["ANN"]
+        )
 
     with h3:
-        st.metric("Fuzzy Logic", hybrid_result["Fuzzy Logic"])
+        st.metric(
+            "Fuzzy Logic",
+            hybrid_result["Fuzzy Logic"]
+        )
 
     with h4:
-        st.metric("Final Ensemble", hybrid_result["Ensemble"])
+        st.metric(
+            "Final Ensemble",
+            hybrid_result["Ensemble"]
+        )
 
     st.metric(
         "Ensemble Confidence",
@@ -1211,9 +1705,14 @@ if current_record_available or manual_mode:
     )
 
     if training_rows:
-        st.info(f"Hybrid AI trained and evaluated using {training_rows:,} records.")
+        st.info(
+            f"Hybrid AI trained and evaluated using {training_rows:,} records."
+        )
 
-    clinical_interview_assistant(severity, alert)
+    clinical_interview_assistant(
+        severity,
+        alert
+    )
 
     st.subheader("💬 Medical Explanation Assistant")
 
@@ -1232,7 +1731,10 @@ if current_record_available or manual_mode:
         )
 
 else:
-    st.warning("Hybrid AI assessment will activate when live or manual data is available.")
+    st.warning(
+        "Hybrid AI assessment will activate when live or manual data is available."
+    )
+
 
 st.divider()
 
@@ -1245,24 +1747,52 @@ st.header("📊 AI Model Evaluation")
 
 if rf_metrics is not None and ann_metrics is not None:
     comparison_df = pd.DataFrame([
-        {"Model": "Random Forest", **rf_metrics},
-        {"Model": "Artificial Neural Network", **ann_metrics}
+        {
+            "Model": "Random Forest",
+            **rf_metrics
+        },
+        {
+            "Model": "Artificial Neural Network",
+            **ann_metrics
+        }
     ])
 
-    for col in ["Accuracy", "Precision", "Recall", "F1 Score"]:
-        comparison_df[col] = (comparison_df[col] * 100).round(2)
+    for col in [
+        "Accuracy",
+        "Precision",
+        "Recall",
+        "F1 Score"
+    ]:
+        comparison_df[col] = (
+            comparison_df[col] * 100
+        ).round(2)
 
     st.subheader("Model Performance Comparison")
-    st.dataframe(comparison_df, use_container_width=True)
+
+    st.dataframe(
+        comparison_df,
+        use_container_width=True
+    )
 
     st.subheader("Random Forest Confusion Matrix")
-    st.dataframe(confusion_matrices["Random Forest"], use_container_width=True)
+
+    st.dataframe(
+        confusion_matrices["Random Forest"],
+        use_container_width=True
+    )
 
     st.subheader("ANN Confusion Matrix")
-    st.dataframe(confusion_matrices["ANN"], use_container_width=True)
+
+    st.dataframe(
+        confusion_matrices["ANN"],
+        use_container_width=True
+    )
 
 else:
-    st.info("Model evaluation will appear when the hybrid AI model is trained.")
+    st.info(
+        "Model evaluation will appear when the hybrid AI model is trained."
+    )
+
 
 st.divider()
 
@@ -1278,12 +1808,20 @@ if feature_importance is not None:
         feature_importance["Importance"] * 100
     ).round(2)
 
-    st.dataframe(feature_importance, use_container_width=True)
+    st.dataframe(
+        feature_importance,
+        use_container_width=True
+    )
 
-    st.bar_chart(feature_importance.set_index("Feature")["Importance (%)"])
+    st.bar_chart(
+        feature_importance.set_index("Feature")["Importance (%)"]
+    )
 
 else:
-    st.info("Feature importance will appear when the AI model is trained.")
+    st.info(
+        "Feature importance will appear when the AI model is trained."
+    )
+
 
 st.divider()
 
@@ -1307,22 +1845,34 @@ if not df_records.empty:
 
     for col in numeric_columns:
         if col in chart_df.columns:
-            chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce")
+            chart_df[col] = pd.to_numeric(
+                chart_df[col],
+                errors="coerce"
+            )
 
     available_chart_cols = [
-        col for col in numeric_columns
+        col
+        for col in numeric_columns
         if col in chart_df.columns
     ]
 
     if available_chart_cols:
-        st.line_chart(chart_df[available_chart_cols])
+        st.line_chart(
+            chart_df[available_chart_cols]
+        )
 
     if "severity" in chart_df.columns:
         st.subheader("Severity Distribution")
-        st.bar_chart(chart_df["severity"].value_counts())
+
+        st.bar_chart(
+            chart_df["severity"].value_counts()
+        )
 
 else:
-    st.info("No Google Sheets records available yet.")
+    st.info(
+        "No Google Sheets records available yet."
+    )
+
 
 st.divider()
 
@@ -1335,9 +1885,14 @@ st.header("📄 Google Sheets Health Records")
 
 if google_connected:
     if not df_records.empty:
-        st.dataframe(df_records, use_container_width=True)
+        st.dataframe(
+            df_records,
+            use_container_width=True
+        )
 
-        csv_data = df_records.to_csv(index=False).encode("utf-8")
+        csv_data = df_records.to_csv(
+            index=False
+        ).encode("utf-8")
 
         st.download_button(
             label="⬇️ Download Health Records as CSV",
@@ -1345,10 +1900,13 @@ if google_connected:
             file_name="student_health_records.csv",
             mime="text/csv"
         )
+
     else:
         st.info("No records found yet.")
+
 else:
     st.warning("Google Sheets not connected.")
+
 
 st.divider()
 

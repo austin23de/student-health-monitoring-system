@@ -1,6 +1,7 @@
 import os
 import time
 import zipfile
+import re
 import requests
 import pandas as pd
 import streamlit as st
@@ -14,17 +15,15 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
+from disease_kb_700 import DISEASE_KB_700
 
-# =========================================================
-# PAGE CONFIG
-# =========================================================
 
 st.set_page_config(
     page_title="Hybrid AI Clinical Triage System",
     layout="wide"
 )
 
-st.title("🏥 Hybrid AI-Based Student Health Monitoring and Clinical Triage System")
+st.title("🏥 Student Health Monitoring and diagnostic System")
 
 st.caption(
     "Educational triage-support system only. "
@@ -122,19 +121,14 @@ def validate_vitals(temp, hr, spo2, bmi, systolic, diastolic):
 def emergency_override(temp, hr, spo2, systolic, diastolic, data_issues):
     if data_issues:
         return True
-
     if temp >= 40:
         return True
-
     if spo2 <= 90:
         return True
-
     if hr >= 130:
         return True
-
     if systolic >= 180 or diastolic >= 120:
         return True
-
     return False
 
 
@@ -181,7 +175,6 @@ def calculate_risk(temp, hr, spo2, bmi, systolic, diastolic, data_issues=None):
 def determine_severity(score, override=False):
     if override:
         return "CRITICAL"
-
     if score >= 8:
         return "CRITICAL"
     elif score >= 4:
@@ -454,19 +447,12 @@ def train_hybrid_models():
     except Exception as e:
         st.error("❌ AI MODEL TRAINING ERROR")
         st.exception(e)
-        return None, None, None, None, None, None, None  
-# =========================================================
-# HYBRID AI PREDICTION FUNCTIONS
-# =========================================================
+        return None, None, None, None, None, None, None
 
-def get_confidence_level(confidence):
-    if confidence >= 0.90:
-        return "High Confidence"
-    elif confidence >= 0.70:
-        return "Moderate Confidence"
-    else:
-        return "Low Confidence"
 
+# =========================================================
+# HYBRID AI PREDICTION
+# =========================================================
 
 def majority_vote(predictions):
     return max(set(predictions), key=predictions.count)
@@ -532,146 +518,98 @@ def predict_hybrid_ai(
 
 
 # =========================================================
-# EXPANDED DISEASE KNOWLEDGE BASE
+# 700-CONDITION DISEASE KNOWLEDGE BASE HELPERS
 # =========================================================
 
-DISEASE_KNOWLEDGE_BASE = {
-    "Common Cold": {
-        "symptoms": ["cough", "catarrh", "runny nose", "sore throat", "sneezing", "mild headache"],
-        "red_flags": ["breathing difficulty", "chest pain"],
-        "follow_up": [
-            "Do you have sneezing?",
-            "Is your runny nose watery?",
-            "Are symptoms mild and gradual?"
-        ],
-        "advice": "Common cold-like symptoms are usually mild. Rest, hydration, and monitoring are recommended."
-    },
-    "Influenza / Flu": {
-        "symptoms": ["fever", "cough", "sore throat", "headache", "body pain", "fatigue", "chills"],
-        "red_flags": ["breathing difficulty", "chest pain", "persistent high fever"],
-        "follow_up": [
-            "Do you have body pain?",
-            "Do you feel unusually weak or tired?",
-            "Do you have chills?"
-        ],
-        "advice": "Flu-like symptoms may require rest, hydration, and medical review if symptoms persist or worsen."
-    },
-    "COVID-19-like Illness": {
-        "symptoms": ["fever", "cough", "sore throat", "loss of smell", "loss of taste", "breathing difficulty", "fatigue"],
-        "red_flags": ["breathing difficulty", "low spo2", "chest pain"],
-        "follow_up": [
-            "Have you lost your sense of smell?",
-            "Have you lost your sense of taste?",
-            "Have you had recent contact with a sick person?"
-        ],
-        "advice": "COVID-like symptoms may require isolation guidance, monitoring, and medical review."
-    },
-    "Allergic Rhinitis": {
-        "symptoms": ["catarrh", "runny nose", "sneezing", "itchy eyes", "watery eyes"],
-        "red_flags": ["breathing difficulty"],
-        "follow_up": [
-            "Do your eyes itch?",
-            "Are symptoms worse around dust or pollen?",
-            "Do you have frequent sneezing?"
-        ],
-        "advice": "Allergy-like symptoms may be triggered by dust, pollen, or environmental exposure."
-    },
-    "Tonsillitis / Throat Infection": {
-        "symptoms": ["sore throat", "fever", "difficulty swallowing", "headache", "body pain"],
-        "red_flags": ["difficulty breathing", "severe throat swelling"],
-        "follow_up": [
-            "Do you have difficulty swallowing?",
-            "Is the throat pain severe?",
-            "Do you have fever?"
-        ],
-        "advice": "Throat infection-like symptoms should be reviewed if pain is severe, persistent, or associated with fever."
-    },
-    "Pneumonia / Lower Respiratory Concern": {
-        "symptoms": ["cough", "fever", "chest pain", "breathing difficulty", "low spo2", "fatigue"],
-        "red_flags": ["breathing difficulty", "low spo2", "chest pain"],
-        "follow_up": [
-            "Do you have chest pain?",
-            "Are you finding it difficult to breathe?",
-            "Is your cough persistent or worsening?"
-        ],
-        "advice": "Breathing difficulty, chest pain, or low oxygen level requires urgent medical review."
-    },
-    "Malaria-like Illness": {
-        "symptoms": ["fever", "chills", "headache", "body pain", "fatigue", "nausea", "sweating"],
-        "red_flags": ["confusion", "persistent vomiting", "severe weakness"],
-        "follow_up": [
-            "Do you have chills?",
-            "Do you have sweating episodes?",
-            "Do you feel weak or nauseous?"
-        ],
-        "advice": "Malaria-like symptoms require proper clinical testing before treatment."
-    },
-    "Gastrointestinal Illness": {
-        "symptoms": ["nausea", "vomiting", "stomach pain", "diarrhea", "weakness"],
-        "red_flags": ["blood in stool", "severe dehydration", "persistent vomiting"],
-        "follow_up": [
-            "Do you have stomach pain?",
-            "Have you vomited?",
-            "Do you have diarrhea?"
-        ],
-        "advice": "Gastrointestinal symptoms may require hydration and clinical review if persistent."
-    },
-    "Asthma-like Respiratory Episode": {
-        "symptoms": ["breathing difficulty", "wheezing", "cough", "chest tightness"],
-        "red_flags": ["severe breathing difficulty", "low spo2", "blue lips"],
-        "follow_up": [
-            "Do you hear wheezing when breathing?",
-            "Do you have chest tightness?",
-            "Have you had similar episodes before?"
-        ],
-        "advice": "Breathing difficulty or wheezing should be reviewed urgently if severe or worsening."
-    },
-    "Sinusitis-like Illness": {
-        "symptoms": ["catarrh", "runny nose", "headache", "facial pain", "blocked nose"],
-        "red_flags": ["severe headache", "swelling around eyes"],
-        "follow_up": [
-            "Do you have facial pain?",
-            "Is your nose blocked?",
-            "Has it lasted more than one week?"
-        ],
-        "advice": "Sinus-like symptoms may require review if severe, prolonged, or associated with facial pain."
-    }
-}
+def get_disease_name(entry):
+    return entry.get("disease_name", "Unknown Condition")
 
 
-SYMPTOM_OPTIONS = sorted(list({
-    symptom
-    for info in DISEASE_KNOWLEDGE_BASE.values()
-    for symptom in info["symptoms"] + info["red_flags"]
-}))
+def get_common_symptoms(entry):
+    return entry.get("common_symptoms", [])
 
 
-def normalize_symptom(symptom):
-    return symptom.lower().strip()
+def get_red_flags(entry):
+    return entry.get("red_flags", [])
+
+
+def get_follow_up_questions(entry):
+    return entry.get("follow_up_questions", [])
+
+
+def get_triage_advice(entry):
+    return entry.get("triage_advice", "Medical review is recommended if symptoms persist or worsen.")
+
+
+def get_overview(entry):
+    return entry.get("overview", "")
+
+
+def get_scope(entry):
+    return entry.get("clinical_scope", "General")
+
+
+@st.cache_data
+def get_symptom_options():
+    symptoms = set()
+
+    for entry in DISEASE_KB_700:
+        for symptom in get_common_symptoms(entry):
+            symptoms.add(symptom.lower().strip())
+        for symptom in get_red_flags(entry):
+            symptoms.add(symptom.lower().strip())
+
+    return sorted(list(symptoms))
+
+
+SYMPTOM_OPTIONS = get_symptom_options()
+
+
+def normalize_text(text):
+    return str(text).lower().strip()
+
+
+def extract_symptoms_from_text(text):
+    text = normalize_text(text)
+    found = []
+
+    for symptom in SYMPTOM_OPTIONS:
+        pattern = r"\b" + re.escape(symptom) + r"\b"
+        if re.search(pattern, text):
+            found.append(symptom)
+
+    return sorted(list(set(found)))
 
 
 def calculate_condition_probabilities(selected_symptoms):
-    selected = [normalize_symptom(s) for s in selected_symptoms]
+    selected = [normalize_text(s) for s in selected_symptoms]
     results = []
 
-    for condition, info in DISEASE_KNOWLEDGE_BASE.items():
-        disease_symptoms = [normalize_symptom(s) for s in info["symptoms"]]
-        red_flags = [normalize_symptom(s) for s in info["red_flags"]]
+    for entry in DISEASE_KB_700:
+        disease_name = get_disease_name(entry)
+        common_symptoms = [normalize_text(s) for s in get_common_symptoms(entry)]
+        red_flags = [normalize_text(s) for s in get_red_flags(entry)]
 
-        matched = [s for s in selected if s in disease_symptoms]
+        matched_symptoms = [s for s in selected if s in common_symptoms]
         matched_red_flags = [s for s in selected if s in red_flags]
 
-        symptom_score = len(matched) / len(disease_symptoms) if disease_symptoms else 0
-        red_flag_bonus = min(len(matched_red_flags) * 0.15, 0.30)
+        if len(common_symptoms) > 0:
+            symptom_match_score = len(matched_symptoms) / len(common_symptoms)
+        else:
+            symptom_match_score = 0
 
-        probability = min(symptom_score + red_flag_bonus, 1.0)
+        red_flag_bonus = min(len(matched_red_flags) * 0.12, 0.30)
+
+        final_score = min(symptom_match_score + red_flag_bonus, 1.0)
 
         results.append({
-            "Possible Condition": condition,
-            "Match Score (%)": round(probability * 100, 1),
-            "Matched Symptoms": ", ".join(matched) if matched else "None",
+            "Possible Condition": disease_name,
+            "Clinical Scope": get_scope(entry),
+            "Match Score (%)": round(final_score * 100, 1),
+            "Matched Symptoms": ", ".join(matched_symptoms) if matched_symptoms else "None",
             "Red Flags": ", ".join(matched_red_flags) if matched_red_flags else "None",
-            "Advice": info["advice"]
+            "Triage Advice": get_triage_advice(entry),
+            "Overview": get_overview(entry)
         })
 
     return pd.DataFrame(results).sort_values(
@@ -680,103 +618,32 @@ def calculate_condition_probabilities(selected_symptoms):
     )
 
 
-def get_dynamic_followup_questions(top_conditions):
+def get_dynamic_followup_questions(top_condition_names):
     questions = []
-    for condition in top_conditions:
-        questions.extend(DISEASE_KNOWLEDGE_BASE[condition]["follow_up"])
+
+    for condition_name in top_condition_names:
+        for entry in DISEASE_KB_700:
+            if get_disease_name(entry) == condition_name:
+                questions.extend(get_follow_up_questions(entry))
 
     unique_questions = []
-    for q in questions:
-        if q not in unique_questions:
-            unique_questions.append(q)
 
-    return unique_questions[:8]
+    for question in questions:
+        if question not in unique_questions:
+            unique_questions.append(question)
 
-
-def map_followup_to_symptoms(question):
-    q = question.lower()
-    symptom_map = []
-
-    if "smell" in q:
-        symptom_map.append("loss of smell")
-    if "taste" in q:
-        symptom_map.append("loss of taste")
-    if "body pain" in q:
-        symptom_map.append("body pain")
-    if "weak" in q or "tired" in q:
-        symptom_map.append("fatigue")
-    if "chills" in q:
-        symptom_map.append("chills")
-    if "chest" in q:
-        symptom_map.append("chest pain")
-    if "breathe" in q or "breathing" in q:
-        symptom_map.append("breathing difficulty")
-    if "itch" in q:
-        symptom_map.append("itchy eyes")
-    if "sneezing" in q:
-        symptom_map.append("sneezing")
-    if "swallowing" in q:
-        symptom_map.append("difficulty swallowing")
-    if "vomited" in q or "vomit" in q:
-        symptom_map.append("vomiting")
-    if "diarrhea" in q:
-        symptom_map.append("diarrhea")
-    if "stomach" in q:
-        symptom_map.append("stomach pain")
-    if "nauseous" in q or "nausea" in q:
-        symptom_map.append("nausea")
-    if "wheezing" in q:
-        symptom_map.append("wheezing")
-    if "facial pain" in q:
-        symptom_map.append("facial pain")
-    if "blocked" in q:
-        symptom_map.append("blocked nose")
-
-    return symptom_map
+    return unique_questions[:10]
 
 
-# =========================================================
-# MEDICAL EXPLANATION ASSISTANT
-# =========================================================
+def map_followup_answer_to_symptoms(question):
+    q = normalize_text(question)
+    detected = []
 
-def medical_explanation_assistant(question, risk_score, severity):
-    question = question.lower()
+    for symptom in SYMPTOM_OPTIONS:
+        if symptom in q:
+            detected.append(symptom)
 
-    disease_keywords = {
-        "sore throat": "A sore throat can occur with common cold, flu, allergies, tonsillitis, throat irritation, or other upper respiratory infections.",
-        "cough": "Cough can occur with common cold, flu, allergies, asthma-like irritation, COVID-like illness, or lower respiratory infection.",
-        "catarrh": "Catarrh or runny nose can occur with common cold, allergic rhinitis, sinus irritation, or flu-like illness.",
-        "runny nose": "Runny nose may occur with common cold, allergies, sinus irritation, or flu-like illness.",
-        "fever": "Fever may suggest infection or inflammation. Persistent or high fever requires clinical review.",
-        "headache": "Headache may occur with fever, flu-like illness, sinus symptoms, dehydration, or stress.",
-        "breathing": "Breathing difficulty is a red-flag symptom and should be reviewed urgently.",
-        "chest pain": "Chest pain is a red-flag symptom and should be reviewed urgently.",
-        "spo2": "SpO₂ measures oxygen saturation. Low values can be serious, while values above 100% suggest sensor error."
-    }
-
-    for keyword, response in disease_keywords.items():
-        if keyword in question:
-            return response + " Use the Dynamic Clinical Interview Assistant to narrow possible causes."
-
-    if "risk" in question or "score" in question:
-        return f"The current risk score is {risk_score}, giving a severity level of {severity}."
-
-    if "ann" in question or "neural" in question:
-        return "The ANN learns patterns from vital signs to classify health risk."
-
-    if "fuzzy" in question:
-        return "Fuzzy logic handles uncertainty by converting readings into degrees such as mildly high, moderately high, or critically high."
-
-    if "random forest" in question:
-        return "Random Forest combines multiple decision trees to classify health risk."
-
-    if "ensemble" in question:
-        return "The ensemble combines Random Forest, ANN, and fuzzy logic into one final decision."
-
-    return (
-        "Ask about symptoms such as cough, sore throat, fever, catarrh, breathing difficulty, "
-        "SpO₂, risk score, or use the clinical interview assistant for condition ranking."
-    )
+    return detected
 
 
 # =========================================================
@@ -784,7 +651,7 @@ def medical_explanation_assistant(question, risk_score, severity):
 # =========================================================
 
 def clinical_interview_assistant(severity, alert):
-    st.subheader("🩺 Dynamic Clinical Interview Assistant")
+    st.subheader("🩺 700-Condition Clinical Interview Assistant")
 
     if severity == "CRITICAL" or alert == "ALERT":
         st.error("🚨 Critical condition detected. Further questioning is skipped.")
@@ -793,16 +660,27 @@ def clinical_interview_assistant(severity, alert):
 
     st.info(
         "Patient is stable enough for symptom screening. "
-        "This assistant ranks possible conditions and asks follow-up questions."
+        "This assistant ranks possible conditions from a 700-condition prototype database."
     )
 
+    free_text = st.text_area(
+        "Describe symptoms in your own words",
+        placeholder="Example: I have cough, sore throat, catarrh and headache for 3 days."
+    )
+
+    extracted_symptoms = extract_symptoms_from_text(free_text)
+
+    if extracted_symptoms:
+        st.success(f"Symptoms detected from text: {', '.join(extracted_symptoms)}")
+
     selected_symptoms = st.multiselect(
-        "Select the symptoms the patient is experiencing:",
-        SYMPTOM_OPTIONS
+        "Select or confirm symptoms:",
+        SYMPTOM_OPTIONS,
+        default=extracted_symptoms
     )
 
     duration = st.selectbox(
-        "How long have the symptoms been present?",
+        "How long have symptoms been present?",
         [
             "Less than 1 day",
             "1–3 days",
@@ -812,46 +690,57 @@ def clinical_interview_assistant(severity, alert):
     )
 
     medication = st.text_input("Has the patient taken any medication? If yes, specify.")
-    extra_notes = st.text_area("Describe any other complaint:")
+    extra_notes = st.text_area("Any additional complaint or context?")
 
     if st.button("Analyze Symptoms"):
         if not selected_symptoms:
-            st.warning("Please select at least one symptom.")
+            st.warning("Please select or type at least one symptom.")
             return
 
         disease_results = calculate_condition_probabilities(selected_symptoms)
+
+        st.session_state["disease_results"] = disease_results
+        st.session_state["selected_symptoms"] = selected_symptoms
+        st.session_state["duration"] = duration
+        st.session_state["medication"] = medication
+        st.session_state["extra_notes"] = extra_notes
+        st.session_state["top_conditions"] = disease_results.head(5)["Possible Condition"].tolist()
+
+    if "disease_results" in st.session_state:
+        disease_results = st.session_state["disease_results"]
 
         st.subheader("Initial Possible Condition Ranking")
         st.dataframe(
             disease_results[
                 [
                     "Possible Condition",
+                    "Clinical Scope",
                     "Match Score (%)",
                     "Matched Symptoms",
                     "Red Flags"
                 ]
-            ],
+            ].head(15),
             use_container_width=True
         )
 
-        top_conditions = disease_results.head(3)["Possible Condition"].tolist()
+        top_conditions = st.session_state["top_conditions"]
 
-        st.session_state["top_conditions"] = top_conditions
-        st.session_state["selected_symptoms"] = selected_symptoms
-        st.session_state["duration"] = duration
-        st.session_state["medication"] = medication
-        st.session_state["extra_notes"] = extra_notes
+        st.subheader("Most Relevant Screening Possibilities")
 
-    if "top_conditions" in st.session_state:
+        for _, row in disease_results.head(5).iterrows():
+            with st.expander(f"{row['Possible Condition']} — {row['Match Score (%)']}% match"):
+                st.write(row["Overview"])
+                st.write(f"**Matched symptoms:** {row['Matched Symptoms']}")
+                st.write(f"**Red flags:** {row['Red Flags']}")
+                st.write(f"**Triage advice:** {row['Triage Advice']}")
+
         st.subheader("Dynamic Follow-Up Questions")
 
-        questions = get_dynamic_followup_questions(
-            st.session_state["top_conditions"]
-        )
+        questions = get_dynamic_followup_questions(top_conditions)
 
-        followup_yes_symptoms = []
+        added_symptoms = []
 
-        with st.form("dynamic_followup_form"):
+        with st.form("followup_form"):
             for question in questions:
                 answer = st.selectbox(
                     question,
@@ -860,18 +749,12 @@ def clinical_interview_assistant(severity, alert):
                 )
 
                 if answer == "Yes":
-                    followup_yes_symptoms.extend(
-                        map_followup_to_symptoms(question)
-                    )
+                    added_symptoms.extend(map_followup_answer_to_symptoms(question))
 
-            submit_refine = st.form_submit_button("Refine Possible Conditions")
+            submit_refined = st.form_submit_button("Refine Possible Conditions")
 
-        if submit_refine:
-            refined_symptoms = list(set(
-                st.session_state["selected_symptoms"] +
-                followup_yes_symptoms
-            ))
-
+        if submit_refined:
+            refined_symptoms = list(set(st.session_state["selected_symptoms"] + added_symptoms))
             refined_results = calculate_condition_probabilities(refined_symptoms)
             best_match = refined_results.iloc[0]
 
@@ -880,11 +763,12 @@ def clinical_interview_assistant(severity, alert):
                 refined_results[
                     [
                         "Possible Condition",
+                        "Clinical Scope",
                         "Match Score (%)",
                         "Matched Symptoms",
                         "Red Flags"
                     ]
-                ],
+                ].head(15),
                 use_container_width=True
             )
 
@@ -906,21 +790,77 @@ def clinical_interview_assistant(severity, alert):
                 st.write(f"Additional complaint: {st.session_state['extra_notes']}")
 
             if best_match["Red Flags"] != "None":
-                st.error(
-                    "Red-flag symptoms were detected. Medical review is recommended urgently."
-                )
+                st.error("Red-flag symptom pattern detected. Medical review is recommended urgently.")
             elif best_match["Match Score (%)"] >= 60:
-                st.warning(
-                    "The symptom pattern is significant. Medical review is recommended for proper diagnosis."
-                )
+                st.warning("Significant symptom match detected. Medical review is recommended for proper diagnosis.")
             else:
-                st.info(
-                    "Symptoms appear mild to moderate based on screening. Continue monitoring and seek review if symptoms worsen."
-                )
+                st.info("Symptoms appear mild to moderate based on screening. Continue monitoring and seek review if symptoms worsen.")
 
             st.caption(
-                "This is a screening and triage-support result only. It does not confirm a medical diagnosis."
+                "This result is screening support only. It does not confirm a medical diagnosis."
             )
+
+
+# =========================================================
+# MEDICAL EXPLANATION ASSISTANT
+# =========================================================
+
+def medical_explanation_assistant(question, risk_score, severity):
+    question_lower = normalize_text(question)
+
+    if "risk" in question_lower or "score" in question_lower:
+        return f"The current risk score is {risk_score}, giving a severity level of {severity}."
+
+    if "spo2" in question_lower or "oxygen" in question_lower:
+        return (
+            "SpO₂ measures blood oxygen saturation. Low SpO₂ can be serious, "
+            "while values above 100% usually indicate sensor error."
+        )
+
+    if "ann" in question_lower or "neural" in question_lower:
+        return "The ANN learns patterns from vital signs to classify health risk."
+
+    if "fuzzy" in question_lower:
+        return "Fuzzy logic handles uncertainty by converting readings into degrees such as mildly high, moderately high, or critically high."
+
+    if "random forest" in question_lower:
+        return "Random Forest combines multiple decision trees to classify health risk."
+
+    if "ensemble" in question_lower:
+        return "The ensemble combines Random Forest, ANN, and fuzzy logic into one final decision."
+
+    matched_conditions = []
+
+    for entry in DISEASE_KB_700:
+        disease_name = normalize_text(get_disease_name(entry))
+
+        if disease_name in question_lower:
+            matched_conditions.append(entry)
+
+    if matched_conditions:
+        entry = matched_conditions[0]
+        return (
+            f"{get_disease_name(entry)}: {get_overview(entry)} "
+            f"Triage advice: {get_triage_advice(entry)}"
+        )
+
+    extracted = extract_symptoms_from_text(question)
+
+    if extracted:
+        disease_results = calculate_condition_probabilities(extracted)
+        top = disease_results.iloc[0]
+
+        return (
+            f"Based on the symptom(s) mentioned ({', '.join(extracted)}), "
+            f"one possible screening match is {top['Possible Condition']} "
+            f"with {top['Match Score (%)']}% symptom match. "
+            f"This is not a diagnosis. Use the clinical interview section for follow-up questions."
+        )
+
+    return (
+        "Ask about symptoms, possible conditions, SpO₂, risk score, ANN, Random Forest, fuzzy logic, or ensemble AI. "
+        "For disease narrowing, use the 700-condition clinical interview assistant."
+    )
 
 
 # =========================================================
@@ -1006,6 +946,7 @@ st.header("📡 Live ESP32 Health Data")
 if live_data:
     student_id = live_data.get("student_id", "ST001")
     name = live_data.get("name", "Unknown")
+
     temperature = float(live_data.get("temperature", 0))
     heart_rate = int(live_data.get("heart_rate", 0))
     spo2 = int(live_data.get("spo2", 0))
@@ -1148,7 +1089,6 @@ if manual_mode:
             current_record_available = True
             st.success("✅ Manual record processed and saved.")
 
-
 st.divider()
 
 
@@ -1176,7 +1116,12 @@ if current_record_available or manual_mode:
         st.info(f"Name: {name}")
 
     with c3:
-        st.warning(f"Severity: {severity}")
+        if severity == "CRITICAL":
+            st.error(f"Severity: {severity}")
+        elif severity == "WARNING":
+            st.warning(f"Severity: {severity}")
+        else:
+            st.success(f"Severity: {severity}")
 
     st.subheader("🩺 Vital Signs")
 
@@ -1222,7 +1167,6 @@ if current_record_available or manual_mode:
             st.info(f"Alert Status: {alert}")
 
     st.progress(min(risk_score / 18, 1.0))
-
 
 st.divider()
 
@@ -1274,8 +1218,8 @@ if current_record_available or manual_mode:
     st.subheader("💬 Medical Explanation Assistant")
 
     user_question = st.text_input(
-        "Ask about symptoms or the AI result",
-        placeholder="Example: Why do I have sore throat?"
+        "Ask about symptoms, possible conditions, or AI result",
+        placeholder="Example: I have cough and sore throat. What could it be?"
     )
 
     if user_question:
@@ -1289,7 +1233,6 @@ if current_record_available or manual_mode:
 
 else:
     st.warning("Hybrid AI assessment will activate when live or manual data is available.")
-
 
 st.divider()
 
@@ -1321,7 +1264,6 @@ if rf_metrics is not None and ann_metrics is not None:
 else:
     st.info("Model evaluation will appear when the hybrid AI model is trained.")
 
-
 st.divider()
 
 
@@ -1342,7 +1284,6 @@ if feature_importance is not None:
 
 else:
     st.info("Feature importance will appear when the AI model is trained.")
-
 
 st.divider()
 
@@ -1383,7 +1324,6 @@ if not df_records.empty:
 else:
     st.info("No Google Sheets records available yet.")
 
-
 st.divider()
 
 
@@ -1409,7 +1349,6 @@ if google_connected:
         st.info("No records found yet.")
 else:
     st.warning("Google Sheets not connected.")
-
 
 st.divider()
 

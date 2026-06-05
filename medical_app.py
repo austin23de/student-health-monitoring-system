@@ -8,29 +8,20 @@ import gspread
 
 from oauth2client.service_account import ServiceAccountCredentials
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix
-)
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
-# =========================================================
-# PAGE CONFIG
-# =========================================================
 
-st.set_page_config(
-    page_title="AI Smart Health Kiosk",
-    layout="wide"
-)
+st.set_page_config(page_title="Hybrid AI Smart Health Kiosk", layout="wide")
 
-st.title("🏥 AI-Powered Smart Health Kiosk Dashboard")
+st.title("🏥 Hybrid AI-Powered Smart Health Kiosk Dashboard")
 
 st.caption(
-    "Educational health monitoring support only. "
-    "This system does not replace professional medical diagnosis or treatment."
+    "This system uses Random Forest, Artificial Neural Network, Fuzzy Logic, "
+    "Ensemble AI, and a symptom-screening assistant for educational health monitoring support only."
 )
 
 API_URL = "https://healthmonitoring-api.onrender.com/latest"
@@ -124,19 +115,14 @@ def validate_vitals(temp, hr, spo2, bmi, systolic, diastolic):
 def emergency_override(temp, hr, spo2, systolic, diastolic, data_issues):
     if data_issues:
         return True
-
     if temp >= 40:
         return True
-
     if spo2 <= 90:
         return True
-
     if hr >= 130:
         return True
-
     if systolic >= 180 or diastolic >= 120:
         return True
-
     return False
 
 
@@ -183,7 +169,6 @@ def calculate_risk(temp, hr, spo2, bmi, systolic, diastolic, data_issues=None):
 def determine_severity(score, override=False):
     if override:
         return "CRITICAL"
-
     if score >= 8:
         return "CRITICAL"
     elif score >= 4:
@@ -233,11 +218,58 @@ def load_google_sheet_records():
 
 
 # =========================================================
+# FUZZY LOGIC ENGINE
+# =========================================================
+
+def fuzzy_membership_low(value, low, high):
+    if value <= low:
+        return 1
+    if value >= high:
+        return 0
+    return (high - value) / (high - low)
+
+
+def fuzzy_membership_high(value, low, high):
+    if value <= low:
+        return 0
+    if value >= high:
+        return 1
+    return (value - low) / (high - low)
+
+
+def fuzzy_health_risk(temp, hr, spo2, bmi, systolic, diastolic):
+    temp_high = fuzzy_membership_high(temp, 37.5, 40)
+    hr_high = fuzzy_membership_high(hr, 100, 130)
+    spo2_low = fuzzy_membership_low(spo2, 90, 95)
+    bmi_high = fuzzy_membership_high(bmi, 30, 40)
+
+    bp_high = max(
+        fuzzy_membership_high(systolic, 140, 180),
+        fuzzy_membership_high(diastolic, 90, 120)
+    )
+
+    fuzzy_score = (
+        temp_high * 0.25 +
+        hr_high * 0.20 +
+        spo2_low * 0.30 +
+        bmi_high * 0.10 +
+        bp_high * 0.15
+    )
+
+    if fuzzy_score >= 0.65:
+        return "CRITICAL", fuzzy_score
+    elif fuzzy_score >= 0.35:
+        return "WARNING", fuzzy_score
+    else:
+        return "NORMAL", fuzzy_score
+
+
+# =========================================================
 # AI MODEL TRAINING
 # =========================================================
 
 @st.cache_resource
-def train_predictive_model():
+def train_hybrid_models():
     try:
         possible_zip_files = [
             "vital_signs_dataset.zip",
@@ -253,7 +285,7 @@ def train_predictive_model():
 
         if zip_path is None:
             st.warning("No AI training ZIP file found.")
-            return None, None, None, None, None
+            return None, None, None, None, None, None, None
 
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             csv_files = [
@@ -263,7 +295,7 @@ def train_predictive_model():
 
             if not csv_files:
                 st.error("No CSV file found inside ZIP.")
-                return None, None, None, None, None
+                return None, None, None, None, None, None, None
 
             with zip_ref.open(csv_files[0]) as file:
                 df = pd.read_csv(file)
@@ -295,11 +327,10 @@ def train_predictive_model():
         for col in required_columns:
             if col not in df.columns:
                 st.error(f"Missing dataset column: {col}")
-                return None, None, None, None, None
+                return None, None, None, None, None, None, None
 
         df = df[required_columns].dropna()
 
-        # Limit for Streamlit Cloud stability
         if len(df) > 50000:
             df = df.sample(n=50000, random_state=42)
 
@@ -325,28 +356,54 @@ def train_predictive_model():
             stratify=y
         )
 
-        model = RandomForestClassifier(
+        rf_model = RandomForestClassifier(
             n_estimators=150,
             max_depth=12,
             random_state=42,
             class_weight="balanced"
         )
 
-        model.fit(X_train, y_train)
+        ann_model = Pipeline([
+            ("scaler", StandardScaler()),
+            ("ann", MLPClassifier(
+                hidden_layer_sizes=(64, 32, 16),
+                activation="relu",
+                solver="adam",
+                max_iter=300,
+                random_state=42
+            ))
+        ])
 
-        y_pred = model.predict(X_test)
+        rf_model.fit(X_train, y_train)
+        ann_model.fit(X_train, y_train)
 
-        metrics = {
-            "Accuracy": accuracy_score(y_test, y_pred),
-            "Precision": precision_score(y_test, y_pred, average="weighted", zero_division=0),
-            "Recall": recall_score(y_test, y_pred, average="weighted", zero_division=0),
-            "F1 Score": f1_score(y_test, y_pred, average="weighted", zero_division=0)
-        }
+        rf_pred = rf_model.predict(X_test)
+        ann_pred = ann_model.predict(X_test)
 
         labels = sorted(y.unique())
 
-        cm = pd.DataFrame(
-            confusion_matrix(y_test, y_pred, labels=labels),
+        rf_metrics = {
+            "Accuracy": accuracy_score(y_test, rf_pred),
+            "Precision": precision_score(y_test, rf_pred, average="weighted", zero_division=0),
+            "Recall": recall_score(y_test, rf_pred, average="weighted", zero_division=0),
+            "F1 Score": f1_score(y_test, rf_pred, average="weighted", zero_division=0)
+        }
+
+        ann_metrics = {
+            "Accuracy": accuracy_score(y_test, ann_pred),
+            "Precision": precision_score(y_test, ann_pred, average="weighted", zero_division=0),
+            "Recall": recall_score(y_test, ann_pred, average="weighted", zero_division=0),
+            "F1 Score": f1_score(y_test, ann_pred, average="weighted", zero_division=0)
+        }
+
+        rf_cm = pd.DataFrame(
+            confusion_matrix(y_test, rf_pred, labels=labels),
+            index=[f"Actual {label}" for label in labels],
+            columns=[f"Predicted {label}" for label in labels]
+        )
+
+        ann_cm = pd.DataFrame(
+            confusion_matrix(y_test, ann_pred, labels=labels),
             index=[f"Actual {label}" for label in labels],
             columns=[f"Predicted {label}" for label in labels]
         )
@@ -361,19 +418,30 @@ def train_predictive_model():
                 "Diastolic BP",
                 "Age"
             ],
-            "Importance": model.feature_importances_
+            "Importance": rf_model.feature_importances_
         }).sort_values(by="Importance", ascending=False)
 
-        return model, feature_importance, len(df), metrics, cm
+        return (
+            rf_model,
+            ann_model,
+            feature_importance,
+            len(df),
+            rf_metrics,
+            ann_metrics,
+            {
+                "Random Forest": rf_cm,
+                "ANN": ann_cm
+            }
+        )
 
     except zipfile.BadZipFile:
         st.error("❌ AI MODEL TRAINING ERROR: ZIP file is invalid.")
-        return None, None, None, None, None
+        return None, None, None, None, None, None, None
 
     except Exception as e:
         st.error("❌ AI MODEL TRAINING ERROR")
         st.exception(e)
-        return None, None, None, None, None
+        return None, None, None, None, None, None, None
 
 
 def get_confidence_level(confidence):
@@ -385,8 +453,13 @@ def get_confidence_level(confidence):
         return "Low Confidence"
 
 
-def predict_ai_status(
-    model,
+def majority_vote(predictions):
+    return max(set(predictions), key=predictions.count)
+
+
+def predict_hybrid_ai(
+    rf_model,
+    ann_model,
     temp,
     hr,
     spo2,
@@ -397,29 +470,63 @@ def predict_ai_status(
     override
 ):
     if override:
-        return "Emergency Override", 1.0
+        return {
+            "Random Forest": "Emergency Override",
+            "ANN": "Emergency Override",
+            "Fuzzy Logic": "Emergency Override",
+            "Ensemble": "CRITICAL",
+            "Confidence": 1.0
+        }
 
-    if model is None:
-        return "Unavailable", 0
+    if rf_model is None or ann_model is None:
+        return {
+            "Random Forest": "Unavailable",
+            "ANN": "Unavailable",
+            "Fuzzy Logic": "Unavailable",
+            "Ensemble": "Unavailable",
+            "Confidence": 0.0
+        }
 
-    try:
-        input_data = [[
-            temp,
-            hr,
-            spo2,
-            bmi,
-            systolic,
-            diastolic,
-            age
-        ]]
+    input_data = [[
+        temp,
+        hr,
+        spo2,
+        bmi,
+        systolic,
+        diastolic,
+        age
+    ]]
 
-        prediction = model.predict(input_data)[0]
-        confidence = max(model.predict_proba(input_data)[0])
+    rf_prediction = rf_model.predict(input_data)[0]
+    ann_prediction = ann_model.predict(input_data)[0]
 
-        return prediction, confidence
+    rf_confidence = max(rf_model.predict_proba(input_data)[0])
+    ann_confidence = max(ann_model.predict_proba(input_data)[0])
 
-    except Exception:
-        return "Unavailable", 0
+    fuzzy_prediction, fuzzy_score = fuzzy_health_risk(
+        temp,
+        hr,
+        spo2,
+        bmi,
+        systolic,
+        diastolic
+    )
+
+    ensemble_prediction = majority_vote([
+        str(rf_prediction),
+        str(ann_prediction),
+        str(fuzzy_prediction)
+    ])
+
+    ensemble_confidence = (rf_confidence + ann_confidence + fuzzy_score) / 3
+
+    return {
+        "Random Forest": rf_prediction,
+        "ANN": ann_prediction,
+        "Fuzzy Logic": fuzzy_prediction,
+        "Ensemble": ensemble_prediction,
+        "Confidence": ensemble_confidence
+    }
 
 
 # =========================================================
@@ -435,19 +542,22 @@ def generate_ai_interpretation(
     diastolic,
     risk_score,
     severity,
-    predicted_status,
-    confidence,
+    hybrid_result,
     data_issues,
     override
 ):
+    confidence = hybrid_result["Confidence"]
     confidence_level = get_confidence_level(confidence)
 
     interpretation = f"""
-### 🧠 AI Health Interpretation
+### 🧠 Hybrid AI Health Interpretation
 
 **Rule-Based Status:** {severity}  
-**AI Predicted Status:** {predicted_status}  
-**AI Confidence:** {confidence * 100:.1f}% ({confidence_level})  
+**Random Forest Prediction:** {hybrid_result["Random Forest"]}  
+**ANN Prediction:** {hybrid_result["ANN"]}  
+**Fuzzy Logic Prediction:** {hybrid_result["Fuzzy Logic"]}  
+**Final Ensemble Decision:** {hybrid_result["Ensemble"]}  
+**Ensemble Confidence:** {confidence * 100:.1f}% ({confidence_level})
 
 **Current Readings**
 - Temperature: {temp} °C
@@ -482,29 +592,29 @@ Alert a health officer immediately and repeat the measurement for confirmation.
 """
         return interpretation
 
-    if severity == "CRITICAL":
+    if severity == "CRITICAL" or str(hybrid_result["Ensemble"]).upper() in ["CRITICAL", "HIGH RISK", "HIGH"]:
         interpretation += """
 
 **Meaning:**  
-The readings suggest a potentially serious health risk.
+The hybrid AI system indicates a potentially serious health risk.
 
 **Recommended Action:**  
-Notify a health officer immediately and arrange urgent clinical assessment.
+Notify a health officer immediately and arrange clinical assessment.
 """
-    elif severity == "WARNING":
+    elif severity == "WARNING" or str(hybrid_result["Ensemble"]).upper() in ["WARNING", "MODERATE RISK", "MEDIUM RISK", "MEDIUM"]:
         interpretation += """
 
 **Meaning:**  
-Some readings are outside the expected range and require close monitoring.
+Some readings suggest possible health concern and require monitoring.
 
 **Recommended Action:**  
-Allow the student to rest, repeat vital checks, and seek medical review if symptoms continue.
+Allow rest, repeat vital checks, and seek medical review if symptoms continue.
 """
     else:
         interpretation += """
 
 **Meaning:**  
-The readings appear generally normal based on system thresholds and AI prediction.
+The readings appear generally normal based on rule-based and hybrid AI assessment.
 
 **Recommended Action:**  
 Continue routine monitoring.
@@ -513,32 +623,131 @@ Continue routine monitoring.
     return interpretation
 
 
+# =========================================================
+# CLINICAL INTERVIEW ASSISTANT
+# =========================================================
+
+def clinical_interview_assistant(severity, alert):
+    st.subheader("🩺 Clinical Interview Assistant")
+
+    if severity == "CRITICAL" or alert == "ALERT":
+        st.error("🚨 Critical condition detected. Further questioning is skipped.")
+        st.warning("Immediate notification to a doctor or health officer is recommended.")
+        return
+
+    st.info("Patient is stable enough for additional symptom screening.")
+
+    with st.form("clinical_interview_form"):
+        headache = st.selectbox("Are you having headache?", ["No", "Yes"])
+        cough = st.selectbox("Are you coughing?", ["No", "Yes"])
+        catarrh = st.selectbox("Do you have catarrh or runny nose?", ["No", "Yes"])
+        sore_throat = st.selectbox("Do you have sore throat?", ["No", "Yes"])
+        chest_pain = st.selectbox("Do you have chest pain?", ["No", "Yes"])
+        breathing = st.selectbox("Are you having difficulty breathing?", ["No", "Yes"])
+        dizziness = st.selectbox("Are you feeling dizzy or weak?", ["No", "Yes"])
+        nausea = st.selectbox("Do you feel nausea or vomiting?", ["No", "Yes"])
+        body_pain = st.selectbox("Do you have body pain or weakness?", ["No", "Yes"])
+
+        duration = st.selectbox(
+            "How long have you had these symptoms?",
+            ["No symptoms", "Less than 1 day", "1–3 days", "More than 3 days"]
+        )
+
+        medication = st.text_input("Have you taken any medication? If yes, specify.")
+        extra_notes = st.text_area("Any other complaint?")
+
+        submit_interview = st.form_submit_button("Generate Symptom Summary")
+
+    if submit_interview:
+        symptoms = []
+
+        if headache == "Yes":
+            symptoms.append("headache")
+        if cough == "Yes":
+            symptoms.append("cough")
+        if catarrh == "Yes":
+            symptoms.append("catarrh/runny nose")
+        if sore_throat == "Yes":
+            symptoms.append("sore throat")
+        if chest_pain == "Yes":
+            symptoms.append("chest pain")
+        if breathing == "Yes":
+            symptoms.append("breathing difficulty")
+        if dizziness == "Yes":
+            symptoms.append("dizziness/weakness")
+        if nausea == "Yes":
+            symptoms.append("nausea/vomiting")
+        if body_pain == "Yes":
+            symptoms.append("body pain/weakness")
+
+        st.subheader("🧠 AI Symptom Screening Summary")
+
+        if not symptoms:
+            st.success("No major symptoms were reported during the interview.")
+            st.write("Recommendation: Continue routine monitoring.")
+        else:
+            st.warning(f"Reported symptoms: {', '.join(symptoms)}")
+            st.write(f"Symptom duration: {duration}")
+
+            if medication:
+                st.write(f"Medication reported: {medication}")
+            else:
+                st.write("No medication was reported.")
+
+            if extra_notes:
+                st.write(f"Additional complaint: {extra_notes}")
+
+            if breathing == "Yes" or chest_pain == "Yes":
+                st.error(
+                    "Possible serious symptom pattern detected. "
+                    "Medical review is recommended as soon as possible."
+                )
+            elif cough == "Yes" and catarrh == "Yes" and headache == "Yes":
+                st.warning(
+                    "Symptoms may suggest a respiratory or flu-like illness pattern. "
+                    "Rest, hydration, and medical review are recommended if symptoms persist."
+                )
+            elif headache == "Yes" and dizziness == "Yes":
+                st.warning(
+                    "Headache with dizziness may require closer monitoring, especially if symptoms continue."
+                )
+            elif nausea == "Yes" and dizziness == "Yes":
+                st.warning(
+                    "Nausea with dizziness may suggest dehydration or general weakness. "
+                    "Further observation is recommended."
+                )
+            else:
+                st.info(
+                    "Mild symptoms reported. Continue monitoring and seek medical review if symptoms worsen."
+                )
+
+        st.caption(
+            "This symptom screening is for support only and does not provide a medical diagnosis."
+        )
+
+
 def symptom_faq(question, temp, hr, spo2, bmi, risk_score, severity):
     question = question.lower()
 
-    if "fever" in question or "temperature" in question:
-        return "Temperature helps detect fever or abnormal body heat. Very high readings should be repeated."
+    if "ann" in question or "neural" in question:
+        return "The ANN is an Artificial Neural Network using MLPClassifier with hidden layers to learn patterns from vital signs."
 
-    if "heart" in question or "pulse" in question or "bpm" in question:
-        return "Heart rate can rise due to fever, stress, dehydration, exercise, or illness."
+    if "fuzzy" in question:
+        return "The fuzzy logic engine converts readings like high temperature, low SpO₂, and high blood pressure into fuzzy risk levels using membership functions."
+
+    if "random forest" in question:
+        return "Random Forest is a supervised machine-learning classifier that combines many decision trees to predict health risk category."
+
+    if "ensemble" in question:
+        return "The ensemble combines Random Forest, ANN, and Fuzzy Logic predictions using majority voting."
 
     if "spo2" in question or "oxygen" in question:
-        return "SpO₂ measures blood oxygen level. Values above 100% are not possible and indicate sensor error."
-
-    if "bmi" in question or "weight" in question:
-        return "BMI estimates body weight status using height and weight, but it should not be used alone for diagnosis."
+        return "SpO₂ measures blood oxygen saturation. Values above 100% are not physiologically possible and suggest sensor error."
 
     if "risk" in question or "score" in question:
         return f"The current risk score is {risk_score}, giving a severity level of {severity}."
 
-    if "project" in question or "system" in question:
-        return (
-            "This is an AI-powered IoT health monitoring system using vital signs, "
-            "Google Sheets storage, risk scoring, machine learning prediction, "
-            "model evaluation, and emergency override logic."
-        )
-
-    return "I can explain temperature, heart rate, SpO₂, BMI, risk score, AI prediction, and recommendations."
+    return "I can explain ANN, Random Forest, Fuzzy Logic, Ensemble AI, temperature, heart rate, SpO₂, BMI, and risk score."
 
 
 # =========================================================
@@ -547,7 +756,16 @@ def symptom_faq(question, temp, hr, spo2, bmi, risk_score, severity):
 
 live_data = get_live_data()
 df_records = load_google_sheet_records()
-ai_model, feature_importance, training_rows, model_metrics, confusion_df = train_predictive_model()
+
+(
+    rf_model,
+    ann_model,
+    feature_importance,
+    training_rows,
+    rf_metrics,
+    ann_metrics,
+    confusion_matrices
+) = train_hybrid_models()
 
 
 # =========================================================
@@ -572,10 +790,10 @@ with col3:
         st.warning("⚠️ Waiting for ESP32 Data")
 
 with col4:
-    if ai_model is not None:
-        st.success("✅ Predictive AI Ready")
+    if rf_model is not None and ann_model is not None:
+        st.success("✅ Hybrid AI Ready")
     else:
-        st.warning("⚠️ AI Model Not Ready")
+        st.warning("⚠️ Hybrid AI Not Ready")
 
 st.divider()
 
@@ -607,7 +825,7 @@ current_record_available = False
 
 
 # =========================================================
-# LIVE DATA
+# LIVE ESP32 DATA
 # =========================================================
 
 st.header("📡 Live ESP32 Health Data")
@@ -848,14 +1066,15 @@ st.divider()
 
 
 # =========================================================
-# AI PREDICTIVE SECTION
+# HYBRID AI SECTION
 # =========================================================
 
-st.header("🤖 AI Predictive Health Assessment")
+st.header("🤖 Hybrid AI Predictive Health Assessment")
 
 if current_record_available or manual_mode:
-    predicted_status, confidence = predict_ai_status(
-        ai_model,
+    hybrid_result = predict_hybrid_ai(
+        rf_model,
+        ann_model,
         temperature,
         heart_rate,
         spo2,
@@ -866,21 +1085,27 @@ if current_record_available or manual_mode:
         override_active
     )
 
-    confidence_level = get_confidence_level(confidence)
+    h1, h2, h3, h4 = st.columns(4)
 
-    p1, p2, p3 = st.columns(3)
+    with h1:
+        st.metric("Random Forest", hybrid_result["Random Forest"])
 
-    with p1:
-        st.metric("Predicted Risk Status", predicted_status)
+    with h2:
+        st.metric("ANN", hybrid_result["ANN"])
 
-    with p2:
-        st.metric("AI Confidence", f"{confidence * 100:.1f}%")
+    with h3:
+        st.metric("Fuzzy Logic", hybrid_result["Fuzzy Logic"])
 
-    with p3:
-        st.metric("Confidence Level", confidence_level)
+    with h4:
+        st.metric("Final Ensemble", hybrid_result["Ensemble"])
+
+    st.metric(
+        "Ensemble Confidence",
+        f"{hybrid_result['Confidence'] * 100:.1f}%"
+    )
 
     if training_rows:
-        st.info(f"Model trained and evaluated using {training_rows:,} records.")
+        st.info(f"Hybrid AI trained and evaluated using {training_rows:,} records.")
 
     st.markdown(
         generate_ai_interpretation(
@@ -892,18 +1117,19 @@ if current_record_available or manual_mode:
             diastolic_bp,
             risk_score,
             severity,
-            predicted_status,
-            confidence,
+            hybrid_result,
             data_issues,
             override_active
         )
     )
 
-    st.subheader("💬 Symptom FAQ Assistant")
+    clinical_interview_assistant(severity, alert)
+
+    st.subheader("💬 MedExplain AI Assistant")
 
     user_question = st.text_input(
         "Ask MedExplain AI",
-        placeholder="Example: What does this AI prediction mean?"
+        placeholder="Example: What is the difference between ANN and Fuzzy Logic?"
     )
 
     if user_question:
@@ -919,7 +1145,7 @@ if current_record_available or manual_mode:
         st.info(response)
 
 else:
-    st.warning("AI assessment will activate when live or manual data is available.")
+    st.warning("Hybrid AI assessment will activate when live or manual data is available.")
 
 st.divider()
 
@@ -930,26 +1156,26 @@ st.divider()
 
 st.header("📊 AI Model Evaluation")
 
-if model_metrics is not None:
-    m1, m2, m3, m4 = st.columns(4)
+if rf_metrics is not None and ann_metrics is not None:
+    comparison_df = pd.DataFrame([
+        {"Model": "Random Forest", **rf_metrics},
+        {"Model": "Artificial Neural Network", **ann_metrics}
+    ])
 
-    with m1:
-        st.metric("Accuracy", f"{model_metrics['Accuracy'] * 100:.2f}%")
+    for col in ["Accuracy", "Precision", "Recall", "F1 Score"]:
+        comparison_df[col] = (comparison_df[col] * 100).round(2)
 
-    with m2:
-        st.metric("Precision", f"{model_metrics['Precision'] * 100:.2f}%")
+    st.subheader("Model Performance Comparison")
+    st.dataframe(comparison_df, use_container_width=True)
 
-    with m3:
-        st.metric("Recall", f"{model_metrics['Recall'] * 100:.2f}%")
+    st.subheader("Random Forest Confusion Matrix")
+    st.dataframe(confusion_matrices["Random Forest"], use_container_width=True)
 
-    with m4:
-        st.metric("F1 Score", f"{model_metrics['F1 Score'] * 100:.2f}%")
-
-    st.subheader("Confusion Matrix")
-    st.dataframe(confusion_df, use_container_width=True)
+    st.subheader("ANN Confusion Matrix")
+    st.dataframe(confusion_matrices["ANN"], use_container_width=True)
 
 else:
-    st.info("Model evaluation will appear when the AI model is trained.")
+    st.info("Model evaluation will appear when the hybrid AI model is trained.")
 
 st.divider()
 
@@ -958,7 +1184,7 @@ st.divider()
 # FEATURE IMPORTANCE
 # =========================================================
 
-st.header("📌 AI Feature Importance")
+st.header("📌 Random Forest Feature Importance")
 
 if feature_importance is not None:
     feature_importance["Importance (%)"] = (

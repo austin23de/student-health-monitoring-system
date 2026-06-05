@@ -40,8 +40,8 @@ try:
         "https://www.googleapis.com/auth/drive"
     ]
 
-    credentials = ServiceAccountCredentials.from_json_keyfile_name(
-        "credentials.json",
+    credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+        st.secrets["gcp_service_account"],
         scope
     )
 
@@ -54,8 +54,8 @@ try:
     google_connected = True
 
 except Exception as e:
-    st.warning(f"Google Sheets not connected: {e}")
-
+    st.error("❌ GOOGLE SHEETS CONNECTION ERROR")
+    st.exception(e)
 
 # =========================================================
 # GET LIVE ESP32 DATA
@@ -131,7 +131,6 @@ Based on the current readings:
 - Heart Rate: {hr} BPM
 - SpO2: {spo2}%
 - BMI: {bmi}
-
 """
 
     if severity == "CRITICAL":
@@ -220,7 +219,7 @@ def symptom_faq(question, score, severity, temp, hr, spo2, bmi):
 # =========================================================
 
 def save_to_google_sheets(data):
-    if sheet:
+    if sheet is not None:
         try:
             sheet.append_row([
                 data["student_id"],
@@ -238,7 +237,8 @@ def save_to_google_sheets(data):
             return True
 
         except Exception as e:
-            st.error(f"Google Sheet Save Error: {e}")
+            st.error("❌ GOOGLE SHEET SAVE ERROR")
+            st.exception(e)
             return False
 
     return False
@@ -539,7 +539,8 @@ if google_connected:
             st.info("No records found.")
 
     except Exception as e:
-        st.error(f"Error loading sheet data: {e}")
+        st.error("❌ ERROR LOADING GOOGLE SHEET DATA")
+        st.exception(e)
 
 else:
     st.warning("Google Sheets not connected.")

@@ -3,16 +3,15 @@ import requests
 import pandas as pd
 import time
 import gspread
+import zipfile
 from oauth2client.service_account import ServiceAccountCredentials
-
-try:
-    from sklearn.tree import DecisionTreeClassifier
-    SKLEARN_AVAILABLE = True
-except Exception:
-    SKLEARN_AVAILABLE = False
+from sklearn.ensemble import RandomForestClassifier
 
 
-st.set_page_config(page_title="Smart Health Kiosk", layout="wide")
+st.set_page_config(
+    page_title="AI Smart Health Kiosk",
+    layout="wide"
+)
 
 st.title("🏥 AI-Powered Smart Health Kiosk Dashboard")
 
@@ -62,9 +61,12 @@ except Exception as e:
 def get_live_data():
     try:
         response = requests.get(API_URL, timeout=10)
+
         if response.status_code == 200:
             return response.json()
+
         return None
+
     except Exception:
         return None
 
@@ -72,7 +74,8 @@ def get_live_data():
 def calculate_bmi(weight, height_cm):
     try:
         height_m = height_cm / 100
-        return round(weight / (height_m * height_m), 2)
+        bmi = weight / (height_m * height_m)
+        return round(bmi, 2)
     except Exception:
         return 0
 
@@ -102,7 +105,9 @@ def determine_severity(score):
 
 
 def determine_alert(severity):
-    return "ALERT" if severity == "CRITICAL" else "OK"
+    if severity == "CRITICAL":
+        return "ALERT"
+    return "OK"
 
 
 def save_to_google_sheets(data):
@@ -122,6 +127,7 @@ def save_to_google_sheets(data):
                 time.strftime("%Y-%m-%d %H:%M:%S")
             ])
             return True
+
         except Exception as e:
             st.error("❌ GOOGLE SHEET SAVE ERROR")
             st.exception(e)
@@ -143,14 +149,122 @@ def load_google_sheet_records():
 
 
 # =========================================================
+# AI MODEL TRAINING FROM ZIP DATASET
+# =========================================================
+
+@st.cache_resource
+def train_predictive_model():
+    try:
+        zip_path = "archive.zip"
+
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            csv_files = [
+                file for file in zip_ref.namelist()
+                if file.endswith(".csv")
+            ]
+
+            if not csv_files:
+                st.error("No CSV file found inside archive.zip")
+                return None, None, None
+
+            csv_file = csv_files[0]
+
+            with zip_ref.open(csv_file) as file:
+                df = pd.read_csv(file)
+
+        required_columns = [
+            "Body Temperature",
+            "Heart Rate",
+            "Oxygen Saturation",
+            "Derived_BMI",
+            "Risk Category"
+        ]
+
+        for col in required_columns:
+            if col not in df.columns:
+                st.error(f"Missing column in dataset: {col}")
+                return None, None, None
+
+        df = df[required_columns].dropna()
+
+        X = df[
+            [
+                "Body Temperature",
+                "Heart Rate",
+                "Oxygen Saturation",
+                "Derived_BMI"
+            ]
+        ]
+
+        y = df["Risk Category"]
+
+        model = RandomForestClassifier(
+            n_estimators=100,
+            random_state=42
+        )
+
+        model.fit(X, y)
+
+        feature_importance = pd.DataFrame({
+            "Feature": [
+                "Body Temperature",
+                "Heart Rate",
+                "Oxygen Saturation",
+                "BMI"
+            ],
+            "Importance": model.feature_importances_
+        }).sort_values(by="Importance", ascending=False)
+
+        return model, feature_importance, len(df)
+
+    except Exception as e:
+        st.error("❌ AI MODEL TRAINING ERROR")
+        st.exception(e)
+        return None, None, None
+
+
+def predict_ai_status(model, temperature, heart_rate, spo2, bmi):
+    if model is None:
+        return "Unavailable", 0
+
+    try:
+        input_data = [[
+            temperature,
+            heart_rate,
+            spo2,
+            bmi
+        ]]
+
+        prediction = model.predict(input_data)[0]
+        confidence = max(model.predict_proba(input_data)[0])
+
+        return prediction, confidence
+
+    except Exception:
+        return "Unavailable", 0
+
+
+# =========================================================
 # AI EXPLANATION FUNCTIONS
 # =========================================================
 
-def generate_ai_interpretation(temp, hr, spo2, bmi, risk_score, severity):
+def generate_ai_interpretation(
+    temp,
+    hr,
+    spo2,
+    bmi,
+    risk_score,
+    severity,
+    predicted_status,
+    confidence
+):
     interpretation = f"""
-### AI Health Interpretation
+### 🧠 AI Health Interpretation
 
-The student currently has a **{severity}** health status based on the kiosk risk scoring logic.
+The student's current rule-based health status is **{severity}**.
+
+The machine-learning model predicts: **{predicted_status}**  
+Prediction confidence: **{confidence * 100:.1f}%**
 
 **Current Readings**
 - Temperature: {temp} °C
@@ -158,32 +272,33 @@ The student currently has a **{severity}** health status based on the kiosk risk
 - SpO₂: {spo2}%
 - BMI: {bmi}
 - Risk Score: {risk_score}
-
 """
 
-    if severity == "CRITICAL":
+    if severity == "CRITICAL" or str(predicted_status).lower() in ["critical", "high risk", "high"]:
         interpretation += """
 **Meaning:**  
-One or more readings are significantly outside the expected range. This may require urgent attention.
+The readings suggest a potentially serious health risk.
 
 **Recommended Action:**  
-Notify a school health officer or healthcare professional immediately. The student should be assessed promptly.
+Notify a health officer immediately and arrange urgent clinical assessment.
 """
-    elif severity == "WARNING":
+
+    elif severity == "WARNING" or str(predicted_status).lower() in ["warning", "medium risk", "moderate risk", "medium"]:
         interpretation += """
 **Meaning:**  
-Some readings are outside the normal range. The student may need closer monitoring.
+Some readings are outside the expected range and require closer monitoring.
 
 **Recommended Action:**  
 Allow the student to rest, repeat the vital signs check, and seek medical review if symptoms continue.
 """
+
     else:
         interpretation += """
 **Meaning:**  
-The readings appear generally normal based on the thresholds used by this system.
+The readings appear generally normal based on the current system thresholds and AI prediction.
 
 **Recommended Action:**  
-Continue routine monitoring and encourage healthy habits.
+Continue routine monitoring.
 """
 
     return interpretation
@@ -200,24 +315,27 @@ def symptom_faq(question, temp, hr, spo2, bmi, risk_score, severity):
 
     if "heart" in question or "pulse" in question or "bpm" in question:
         return (
-            "A high heart rate may happen because of stress, fever, dehydration, activity, or illness. "
+            "A high heart rate may occur due to stress, fever, dehydration, activity, or illness. "
             "If it remains high, medical review is advised."
         )
 
     if "spo2" in question or "oxygen" in question or "breathing" in question:
         return (
-            "Low SpO₂ may suggest reduced oxygen level. "
+            "Low SpO₂ may indicate reduced oxygen level. "
             "If the student has breathing difficulty or very low oxygen level, urgent care is needed."
         )
 
     if "bmi" in question or "weight" in question:
         return (
-            "BMI estimates body weight status using height and weight. "
+            "BMI estimates body weight status from height and weight. "
             "It is useful for screening but should not be used alone to judge health."
         )
 
     if "risk" in question or "score" in question or "severity" in question:
-        return generate_ai_interpretation(temp, hr, spo2, bmi, risk_score, severity)
+        return (
+            f"The current risk score is {risk_score}, giving a severity level of {severity}. "
+            "This is based on temperature, heart rate, and oxygen saturation thresholds."
+        )
 
     if "recommend" in question or "advice" in question or "what should" in question:
         if severity == "CRITICAL":
@@ -231,68 +349,27 @@ def symptom_faq(question, temp, hr, spo2, bmi, risk_score, severity):
         return (
             "This project is an AI-powered IoT student health monitoring system. "
             "It collects vital signs, calculates health risk, stores records in Google Sheets, "
-            "visualizes health trends, and provides AI-style explanations and recommendations."
+            "visualizes trends, and uses machine learning to predict health risk status."
         )
 
     return (
         "I can answer questions about temperature, fever, heart rate, SpO₂, BMI, risk score, "
-        "severity level, recommendations, and how this system works."
+        "severity level, recommendations, and how this AI health monitoring system works."
     )
 
 
 # =========================================================
-# SIMPLE PREDICTIVE AI MODEL
+# LOAD DATA AND TRAIN AI
 # =========================================================
 
-def train_predictive_model(df):
-    if not SKLEARN_AVAILABLE:
-        return None
-
-    required_cols = ["temperature", "heart_rate", "spo2", "bmi", "severity"]
-
-    if df.empty:
-        return None
-
-    for col in required_cols:
-        if col not in df.columns:
-            return None
-
-    try:
-        clean_df = df[required_cols].dropna()
-
-        if len(clean_df) < 5:
-            return None
-
-        X = clean_df[["temperature", "heart_rate", "spo2", "bmi"]]
-        y = clean_df["severity"]
-
-        model = DecisionTreeClassifier(random_state=42)
-        model.fit(X, y)
-
-        return model
-
-    except Exception:
-        return None
-
-
-def predict_ai_status(model, temp, hr, spo2, bmi):
-    if model is None:
-        return "Prediction unavailable: not enough historical data yet."
-
-    try:
-        prediction = model.predict([[temp, hr, spo2, bmi]])[0]
-        return prediction
-    except Exception:
-        return "Prediction unavailable."
+live_data = get_live_data()
+df_records = load_google_sheet_records()
+ai_model, feature_importance, training_rows = train_predictive_model()
 
 
 # =========================================================
 # CONNECTION STATUS
 # =========================================================
-
-live_data = get_live_data()
-df_records = load_google_sheet_records()
-ai_model = train_predictive_model(df_records)
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -315,7 +392,7 @@ with col4:
     if ai_model is not None:
         st.success("✅ Predictive AI Ready")
     else:
-        st.warning("⚠️ AI Model Pending Data")
+        st.warning("⚠️ AI Model Not Ready")
 
 st.divider()
 
@@ -340,7 +417,7 @@ current_record_available = False
 
 
 # =========================================================
-# LIVE DATA SECTION
+# LIVE ESP32 DATA
 # =========================================================
 
 st.header("📡 Live ESP32 Health Data")
@@ -348,10 +425,12 @@ st.header("📡 Live ESP32 Health Data")
 if live_data:
     student_id = live_data.get("student_id", "ST001")
     name = live_data.get("name", "Unknown")
+
     temperature = float(live_data.get("temperature", 0))
     heart_rate = int(live_data.get("heart_rate", 0))
     spo2 = int(live_data.get("spo2", 0))
     bp = live_data.get("bp", "120/80")
+
     weight = float(live_data.get("weight", 70))
     height = float(live_data.get("height", 170))
 
@@ -378,66 +457,13 @@ if live_data:
 
 else:
     st.warning("⚠️ No live ESP32 data available.")
-    st.info("Use Manual Override Mode below for testing.")
-
-
-# =========================================================
-# DISPLAY CURRENT VITALS
-# =========================================================
-
-if current_record_available:
-    st.subheader("👤 Student Information")
-
-    info1, info2, info3 = st.columns(3)
-
-    with info1:
-        st.info(f"Student ID: {student_id}")
-
-    with info2:
-        st.info(f"Name: {name}")
-
-    with info3:
-        st.info(f"Severity: {severity}")
-
-    st.subheader("🩺 Vital Signs")
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        st.metric("🌡 Temperature", f"{temperature} °C")
-
-    with c2:
-        st.metric("❤️ Heart Rate", f"{heart_rate} BPM")
-
-    with c3:
-        st.metric("🫁 SpO₂", f"{spo2}%")
-
-    with c4:
-        st.metric("⚖️ BMI", f"{bmi}")
-
-    st.subheader("📋 Risk Analysis")
-
-    r1, r2, r3 = st.columns(3)
-
-    with r1:
-        st.warning(f"Risk Score: {risk_score}")
-
-    with r2:
-        if severity == "CRITICAL":
-            st.error(f"Severity: {severity}")
-        elif severity == "WARNING":
-            st.warning(f"Severity: {severity}")
-        else:
-            st.success(f"Severity: {severity}")
-
-    with r3:
-        st.info(f"Alert Status: {alert}")
+    st.info("Use Manual Vital Entry below for testing.")
 
 st.divider()
 
 
 # =========================================================
-# MANUAL OVERRIDE SECTION
+# MANUAL ENTRY
 # =========================================================
 
 st.header("🛠 Manual Vital Entry")
@@ -493,24 +519,70 @@ st.divider()
 
 
 # =========================================================
-# AI INTERPRETATION SECTION
+# DISPLAY CURRENT VITALS
 # =========================================================
 
-st.header("🤖 MedExplain AI Assistant")
+if current_record_available or manual_mode:
+    st.header("👤 Current Student Health Summary")
+
+    info1, info2, info3 = st.columns(3)
+
+    with info1:
+        st.info(f"Student ID: {student_id}")
+
+    with info2:
+        st.info(f"Name: {name}")
+
+    with info3:
+        st.info(f"Severity: {severity}")
+
+    st.subheader("🩺 Vital Signs")
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric("🌡 Temperature", f"{temperature} °C")
+
+    with c2:
+        st.metric("❤️ Heart Rate", f"{heart_rate} BPM")
+
+    with c3:
+        st.metric("🫁 SpO₂", f"{spo2}%")
+
+    with c4:
+        st.metric("⚖️ BMI", f"{bmi}")
+
+    st.subheader("📋 Risk Analysis")
+
+    r1, r2, r3 = st.columns(3)
+
+    with r1:
+        st.warning(f"Risk Score: {risk_score}")
+
+    with r2:
+        if severity == "CRITICAL":
+            st.error(f"Severity: {severity}")
+        elif severity == "WARNING":
+            st.warning(f"Severity: {severity}")
+        else:
+            st.success(f"Severity: {severity}")
+
+    with r3:
+        st.info(f"Alert Status: {alert}")
+
+    st.progress(min(risk_score / 7, 1.0))
+
+st.divider()
+
+
+# =========================================================
+# AI PREDICTIVE SECTION
+# =========================================================
+
+st.header("🤖 AI Predictive Health Assessment")
 
 if current_record_available or manual_mode:
-    st.markdown(
-        generate_ai_interpretation(
-            temperature,
-            heart_rate,
-            spo2,
-            bmi,
-            risk_score,
-            severity
-        )
-    )
-
-    predicted_status = predict_ai_status(
+    predicted_status, confidence = predict_ai_status(
         ai_model,
         temperature,
         heart_rate,
@@ -518,64 +590,102 @@ if current_record_available or manual_mode:
         bmi
     )
 
-    st.subheader("🧠 Predictive AI Result")
-    st.info(f"Predicted Health Status: {predicted_status}")
+    p1, p2, p3 = st.columns(3)
 
-    ai_col1, ai_col2 = st.columns([2, 1])
+    with p1:
+        st.metric("Predicted Risk Status", predicted_status)
 
-    with ai_col1:
-        user_question = st.text_input(
-            "Ask MedExplain AI",
-            placeholder="Example: What does this risk score mean?"
+    with p2:
+        st.metric("AI Confidence", f"{confidence * 100:.1f}%")
+
+    with p3:
+        if training_rows:
+            st.metric("Training Records", f"{training_rows:,}")
+        else:
+            st.metric("Training Records", "Unavailable")
+
+    st.markdown(
+        generate_ai_interpretation(
+            temperature,
+            heart_rate,
+            spo2,
+            bmi,
+            risk_score,
+            severity,
+            predicted_status,
+            confidence
         )
+    )
 
-        if user_question:
-            response = symptom_faq(
-                user_question,
-                temperature,
-                heart_rate,
-                spo2,
-                bmi,
-                risk_score,
-                severity
-            )
-            st.info(response)
+    st.subheader("💬 Symptom FAQ Assistant")
 
-    with ai_col2:
-        st.subheader("Suggested Questions")
-        st.write("- What does this risk score mean?")
-        st.write("- What does low SpO₂ mean?")
-        st.write("- What should I do next?")
-        st.write("- Explain the BMI result")
-        st.write("- What does this system do?")
+    user_question = st.text_input(
+        "Ask MedExplain AI",
+        placeholder="Example: What does this risk score mean?"
+    )
+
+    if user_question:
+        response = symptom_faq(
+            user_question,
+            temperature,
+            heart_rate,
+            spo2,
+            bmi,
+            risk_score,
+            severity
+        )
+        st.info(response)
 
 else:
-    st.warning("AI Assistant will activate when live or manual health data is available.")
+    st.warning("AI assessment will activate when live or manual data is available.")
 
 st.divider()
 
 
 # =========================================================
-# TREND CHARTS
+# AI FEATURE IMPORTANCE
 # =========================================================
 
-st.header("📈 Health Trend Analysis")
+st.header("📊 AI Model Feature Importance")
+
+if feature_importance is not None:
+    st.dataframe(feature_importance, use_container_width=True)
+    st.bar_chart(
+        feature_importance.set_index("Feature")
+    )
+else:
+    st.info("Feature importance will appear when the AI model is trained.")
+
+st.divider()
+
+
+# =========================================================
+# GOOGLE SHEET TREND ANALYSIS
+# =========================================================
+
+st.header("📈 Google Sheets Health Trend Analysis")
 
 if not df_records.empty:
     chart_df = df_records.copy()
 
-    numeric_columns = ["temperature", "heart_rate", "spo2", "bmi", "risk_score"]
+    numeric_columns = [
+        "temperature",
+        "heart_rate",
+        "spo2",
+        "bmi",
+        "risk_score"
+    ]
 
     for col in numeric_columns:
         if col in chart_df.columns:
             chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce")
 
     available_chart_cols = [
-        col for col in numeric_columns if col in chart_df.columns
+        col for col in numeric_columns
+        if col in chart_df.columns
     ]
 
     if available_chart_cols:
-        st.subheader("Vital Signs and Risk Score Trends")
         st.line_chart(chart_df[available_chart_cols])
 
     if "severity" in chart_df.columns:
@@ -583,13 +693,13 @@ if not df_records.empty:
         st.bar_chart(chart_df["severity"].value_counts())
 
 else:
-    st.info("No Google Sheets records available for trend analysis yet.")
+    st.info("No Google Sheets records available yet.")
 
 st.divider()
 
 
 # =========================================================
-# GOOGLE SHEET RECORDS AND DOWNLOAD
+# GOOGLE SHEET RECORDS
 # =========================================================
 
 st.header("📄 Google Sheets Health Records")
